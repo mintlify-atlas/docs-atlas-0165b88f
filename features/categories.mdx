@@ -1,0 +1,151 @@
+---
+title: "Organizing Finances with Categories in Leo Counter"
+sidebarTitle: "Categories"
+description: "Categories in Leo Counter classify every movement as income or expense. Tag categories as fixed to link them with recurring transactions, and view distributions in reports."
+---
+
+Categories give every financial movement a semantic label that goes beyond the raw amount and date. When you record a grocery run you tag it as "Supermercado"; when a salary arrives you tag it as "Salario". Leo Counter uses those tags to group and aggregate data across the KPI, trend, and distribution charts in the reports module, making it easy to see which spending areas consume the most budget each month.
+
+## The Category Model
+
+Categories are stored in the `categorias` table and support soft deletes, so removed categories are preserved in the historical record and can be restored by an admin.
+
+```php
+// database/migrations/2026_01_14_200821_create_categorias_table.php
+$table->uuid('id')->primary();
+$table->string('nombre');
+$table->foreignId('tipo_movimiento_id')->constrained('tipo_movimientos')->onDelete('cascade');
+$table->boolean('es_fijo')->default(false);
+$table->text('descripcion')->nullable();
+$table->boolean('is_system')->default(false);
+$table->softDeletes();
+// unique per (nombre, tipo_movimiento_id)
+$table->unique(['nombre', 'tipo_movimiento_id']);
+```
+
+The unique constraint means you can have an income category and an expense category with the same name (e.g. "Transferencia" for both directions), but you cannot have two income categories called "Salario".
+
+## Category Fields
+
+<ParamField body="nombre" type="string" required>
+  The category label (max 255 characters). Must be unique within the same movement type.
+</ParamField>
+<ParamField body="tipo_movimiento_id" type="integer" required>
+  Classifies the category as income (`1`) or expense (`2`). This value is validated against the `tipo_movimientos` table.
+</ParamField>
+<ParamField body="descripcion" type="string">
+  Optional longer description of what belongs in this category (max 1,000 characters).
+</ParamField>
+
+```php
+// app/Http/Requests/Categoria/StoreAndUpdateCategoriaRequest.php
+return [
+    'nombre'             => 'required|string|max:255',
+    'tipo_movimiento_id' => [
+        'required', 'integer', 'exists:tipo_movimientos,id',
+        Rule::unique('categorias')
+            ->where(fn ($q) => $q->where('nombre', $this->nombre))
+            ->ignore($this->id)
+    ],
+    'descripcion'        => 'nullable|string|max:1000',
+];
+```
+
+## The `es_fijo` Flag
+
+The `es_fijo` boolean marks a category as "fixed" — meaning it is associated with recurring obligations rather than one-off purchases. When you create a fixed movement (`MovimientoFijo`), best practice is to use a category where `es_fijo = true` so that the reports engine can filter by fixed-only categories if needed.
+
+You toggle `es_fijo` without editing the full category form:
+
+```
+PATCH /categorias/{categoria}/{attribute}/toggle
+```
+
+Where `{attribute}` is `es_fijo`. The `ToggleCategoryCommand` is dispatched and the flag is flipped atomically.
+
+```php
+// app/Http/Controllers/Categoria/CategoriaController.php
+public function toggleEsFijo(string $id, string $attribute)
+{
+    $this->dispatcher->dispatch(new ToggleCategoryCommand(id: $id, attribute: $attribute));
+    Inertia::flash('success', 'Categoria actualizada con exito');
+    return redirect()->route('categorias.index');
+}
+```
+
+<Info>
+  The `es_fijo` flag does not restrict which movements can use the category — it is a soft metadata tag. Any movement type can reference any category regardless of this flag.
+</Info>
+
+## System Categories
+
+The `is_system` boolean marks categories that are seeded by the application itself and cannot be deleted through the UI. These exist to ensure baseline reporting always has valid data.
+
+## Category Routes
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/categorias` | List all categories |
+| GET | `/categorias/create` | Show creation form |
+| POST | `/categorias` | Store a new category |
+| GET | `/categorias/{id}/edit` | Show edit form |
+| PUT | `/categorias/{id}` | Update a category |
+| DELETE | `/categorias/{id}` | Soft-delete a category |
+| PATCH | `/categorias/{id}/{attribute}/toggle` | Toggle `es_fijo` flag |
+
+## How Categories Appear in Reports
+
+The `CategoryDistributionAssembler` aggregates all movements in the selected period, groups them by category, and returns a `FullCategoryDistributionDTO` containing the total movement count across categories:
+
+```php
+// app/Application/Reporte/Assemblers/Movimientos/CategoryDistributionAssembler.php
+$categoryCollection = $results->get(MovimientoReportStatisticType::CATEGORY_DISTRIBUTION);
+return new FullCategoryDistributionDTO(
+    $categoryCollection,
+    $categoryCollection->totalMovimientos()
+);
+```
+
+The reports front-end renders this data as a **pie chart** that shows which categories represent the largest share of income or expenses in your selected period. You can further filter by specific categories using the filter sheet.
+
+## Soft Deletes and Restoration
+
+Deleting a category is a soft delete — the record is flagged with a `deleted_at` timestamp and hidden from lists and forms, but never physically removed. Admins can restore or permanently hard-delete categories from:
+
+```
+GET    /configuracion/deleted/categorias
+PUT    /configuracion/deleted/categorias/restore/{id}
+DELETE /configuracion/deleted/categorias/hard-delete/{id}
+```
+
+<Warning>
+  Hard-deleting a category that has associated movements will leave those movements without a valid category reference. Always check for dependent records before performing a hard delete.
+</Warning>
+
+## Best Practices: Suggested Household Category Structure
+
+<Accordion title="Income categories (tipo_movimiento_id = 1)">
+  | Category | `es_fijo` | Typical use |
+  |---|---|---|
+  | Salario | `true` | Monthly fixed salary |
+  | Freelance | `false` | Variable project payments |
+  | Transferencia recibida | `false` | One-off bank transfers |
+  | Reembolso | `false` | Expense reimbursements |
+</Accordion>
+
+<Accordion title="Expense categories (tipo_movimiento_id = 2)">
+  | Category | `es_fijo` | Typical use |
+  |---|---|---|
+  | Vivienda (Arriendo/Hipoteca) | `true` | Monthly housing cost |
+  | Servicios públicos | `true` | Utilities billed monthly |
+  | Supermercado | `false` | Weekly grocery runs |
+  | Transporte | `false` | Fuel, public transit |
+  | Salud | `false` | Medical and pharmacy |
+  | Educación | `true` | Tuition or subscriptions |
+  | Entretenimiento | `false` | Dining out, streaming |
+  | Seguros | `true` | Insurance premiums |
+</Accordion>
+
+<Tip>
+  Keep category names short and consistent. The reports pie chart displays the `nombre` field directly — long names can truncate in smaller chart views.
+</Tip>

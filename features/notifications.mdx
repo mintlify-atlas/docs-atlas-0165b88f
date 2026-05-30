@@ -1,0 +1,198 @@
+---
+title: "Email Notifications and Alerts in Leo Counter"
+sidebarTitle: "Notifications"
+description: "Leo Counter sends email alerts for pending payments and recurring events. Configure notification channels and subscribers through the admin settings panel."
+---
+
+Leo Counter's notification system keeps household members informed about upcoming financial obligations without requiring them to log in and check manually. Administrators configure one or more named email channels, assign subscriber users to those channels, and the scheduler takes care of firing alerts when fixed movements become due or pending payments are approaching their deadline.
+
+The entire notification configuration lives under **Configuración** (`/configuracion`) and is restricted to users with the admin role.
+
+## Notification Channels (CanalNotificacion)
+
+A notification channel represents a named email delivery pipeline. Each channel has an `active` flag that controls whether notifications actually get sent through it.
+
+```php
+// database/migrations/2026_05_21_191547_create_canales_notificacion_table.php
+$table->uuid('id')->primary();
+$table->string('nombre')->unique();
+$table->boolean('active')->default(false);
+```
+
+<Info>
+  Currently, Leo Counter supports the **Email** channel type only, as defined by `CanalesNotificacionEnum::EMAIL = 'Email'`. Additional channel types (e.g. SMS, webhook) can be added in future releases.
+</Info>
+
+### Channel Routes
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/canal-notificaciones` | List all channels |
+| POST | `/canal-notificaciones` | Create a channel |
+| PUT | `/canal-notificaciones/{id}` | Update a channel |
+| DELETE | `/canal-notificaciones/{id}` | Delete a channel |
+| PATCH | `/canal-notificaciones/{id}/{attribute}/toggle` | Toggle `active` flag |
+
+Toggle a channel on or off:
+
+```
+PATCH /canal-notificaciones/{canal}/{attribute}/toggle
+```
+
+Where `{attribute}` is `active`. The `ToggleCanalCommand` is dispatched and the boolean is flipped. After the update Leo Counter redirects back to `/configuracion`.
+
+```php
+// app/Http/Controllers/Notificacion/CanalNotificacionController.php
+public function toggle(string $id, string $atribute)
+{
+    $this->dispatcher->dispatch(new ToggleCanalCommand(id: $id, attribute: $atribute));
+    Inertia::flash('success', 'Canal actualizado');
+    return redirect()->route('configuracion.index');
+}
+```
+
+## Subscribers (SuscriptorNotificacion)
+
+A subscriber pairs a user account with a notification channel. When a notification fires on a channel, every active and verified subscriber on that channel receives the email.
+
+```php
+// database/migrations/2026_05_21_191548_create_suscriptores_notificaciones_table.php
+$table->uuid('id')->primary();
+$table->foreignUuid('user_id')->constrained('users');
+$table->foreignUuid('canal_notificacion_id')->constrained('canales_notificacion');
+$table->boolean('active')->default(true);
+$table->timestamp('verified_at')->nullable();
+$table->unique(['user_id', 'canal_notificacion_id']);
+```
+
+The `verified_at` field is `null` until the subscriber clicks the email verification link. Unverified subscribers do not receive notifications even if their `active` flag is `true`.
+
+### Creating a Subscriber
+
+Subscribers are created by the admin using a form validated by `StoreAndUpdateSuscriptorRequest`:
+
+```php
+// app/Http/Requests/Notificacion/StoreAndUpdateSuscriptorRequest.php
+return [
+    'user_id'              => ['required', 'string', 'exists:users,id'],
+    'canal_notificacion_id'=> ['required', 'string', 'exists:canales_notificacion,id'],
+];
+```
+
+When a subscriber is stored, `StoreSuscriptorHandler` dispatches an email verification message using `SendEmailVerificationToSuscriptorStrategy`. The email contains a **signed URL** that expires according to your application's link expiry setting.
+
+### Subscriber Routes
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/suscriptor-notificaciones` | List all subscribers |
+| POST | `/suscriptor-notificaciones` | Add a subscriber |
+| DELETE | `/suscriptor-notificaciones/{id}` | Remove a subscriber |
+| PATCH | `/suscriptor-notificaciones/{id}/{attribute}/toggle` | Toggle `active` flag |
+
+<Note>
+  The edit and update actions are intentionally omitted for subscribers. To change a subscriber's channel, delete the existing subscription and create a new one.
+</Note>
+
+### Email Verification
+
+After an admin adds a subscriber, the user receives a verification email at their registered address. Clicking the link hits:
+
+```
+GET /suscriptores/verificar/{suscriptorId}
+```
+
+This route is protected by Laravel's `signed` middleware so it cannot be tampered with. The `SuscriptorVerificationController` dispatches `VerifySuscriptorCommand`, which sets `verified_at` to the current timestamp and renders a confirmation view.
+
+```php
+// app/Http/Controllers/Notificacion/SuscriptorVerificationController.php
+public function verify(string $suscriptorId) {
+    $this->commandBus->dispatch(new VerifySuscriptorCommand($suscriptorId));
+    return view('notificaciones.suscriptores.verified');
+}
+```
+
+### Toggle Subscriber Active State
+
+Admins can temporarily pause notifications for a specific subscriber without removing them:
+
+```
+PATCH /suscriptor-notificaciones/{suscriptor}/{attribute}/toggle
+```
+
+```php
+// app/Http/Controllers/Notificacion/SuscriptorController.php
+public function toggle(string $id, string $attribute)
+{
+    $this->dispatcher->dispatch(new ToggleSuscriptorCommand(id: $id, attribute: $attribute));
+    Inertia::flash('success', 'Suscripción actualizada');
+    return redirect()->route('configuracion.index');
+}
+```
+
+## What Triggers Notifications
+
+Notifications are fired by the **daily financial tasks command**, which processes two types of events:
+
+1. **Fixed movements due** — when a `MovimientoFijo` reaches its `fecha_proximo` (or is within the `dias_aviso` warning window), `ProcessFinancialTaskForMovimientoFijoCommand` is dispatched. If `registrar_automatico = true`, Leo Counter automatically creates a pending movement. Regardless, subscribers on active channels receive an alert.
+
+2. **Pending payments due or expired** — `ProcessFinancialTasksForMovimientoPendienteCommand` scans pending movements. Movements approaching `fecha_programada` within the `dias_aviso` window trigger a warning notification (`SendMessageToUsersWhenMovimientoPendienteWarningDayArrivedEventHandler`). Movements whose `fecha_programada` has passed without being marked done trigger an expiry alert (`SendMessageToUsersWhenMovimientoPendienteExpiredEventHandler`) and transition their status to `vencido`.
+
+## The Daily Scheduler Command
+
+```php
+// app/Console/Commands/ProcessDailyFinancialTasks.php
+protected $signature    = 'leo:process-daily-financial-tasks';
+protected $description  = 'Procesa las tareas financieras diarias';
+
+public function handle()
+{
+    $this->commandBus->dispatch(new ProcessFinancialTaskForMovimientoFijoCommand());
+    $this->commandBus->dispatch(new ProcessFinancialTasksForMovimientoPendienteCommand());
+    $this->info('Tareas financieras diarias procesadas');
+}
+```
+
+Run it manually:
+
+```bash
+php artisan leo:process-daily-financial-tasks
+```
+
+In production, the command is registered in the Laravel scheduler and executed automatically once per day by the scheduler container.
+
+<Note>
+  Notifications only fire if the **scheduler container** is running. In the Docker Compose development setup the scheduler service must be started explicitly. Verify it is up before testing notifications end-to-end.
+</Note>
+
+## Development Email Testing with Mailhog
+
+During local development Leo Counter is pre-configured to route all outgoing email through **Mailhog**, an in-memory SMTP server that captures messages without sending them to real inboxes.
+
+Open the Mailhog web UI at:
+
+```
+http://localhost:8025
+```
+
+All verification emails and financial alert notifications will appear here. This lets you test the full notification flow — channel creation, subscriber enrollment, verification link, and daily task alerts — without touching real email addresses.
+
+## Setup Workflow
+
+<Steps>
+  <Step title="Create a notification channel">
+    Log in as admin and navigate to **Configuración**. Under notification channels, click **Create** and enter a unique channel name (e.g. "Email Familia"). Toggle the channel to **active** once it is ready.
+  </Step>
+  <Step title="Add subscribers">
+    Within the same configuration page, create a subscriber by selecting a Leo Counter user and linking them to the channel. Each user–channel pair is unique. The system immediately dispatches a verification email to the user.
+  </Step>
+  <Step title="Subscribers verify their email">
+    Each subscriber receives an email with a signed verification link at `/suscriptores/verificar/{id}`. Clicking the link sets `verified_at` and activates their subscription.
+  </Step>
+  <Step title="Configure advance notice on movements">
+    When creating fixed or pending movements, set `dias_aviso` to a positive integer to receive a warning email that many days before the due date. For example, `dias_aviso = 3` sends an alert three days ahead.
+  </Step>
+  <Step title="Receive notifications automatically">
+    Once the scheduler runs `leo:process-daily-financial-tasks`, all active, verified subscribers on active channels receive email alerts for any movements that are due that day or entering their warning window.
+  </Step>
+</Steps>

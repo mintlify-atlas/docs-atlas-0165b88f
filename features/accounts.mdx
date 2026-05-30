@@ -1,0 +1,191 @@
+---
+title: "Account and Owner Management in Leo Counter"
+sidebarTitle: "Accounts"
+description: "Leo Counter lets you manage multiple financial accounts with account types and owners. Toggle accounts active or inactive and assign them to any recorded movement."
+---
+
+Accounts in Leo Counter represent the real-world financial containers where your money lives — a checking account at your bank, a savings account, a cash wallet, or a digital payment app. Every movement you record must be linked to exactly one account, which means Leo Counter can track the running balance of each container and show you at a glance how money flows between them.
+
+## The Account Model
+
+Accounts are stored in the `cuentas` table. The model tracks both an `saldo_inicial` (the opening balance you enter when you create the account) and a `saldo_actual` (maintained automatically as movements are recorded and deleted).
+
+```php
+// database/migrations/2026_01_07_215211_create_cuentas_table.php
+$table->uuid('id')->primary();
+$table->string('nombre');
+$table->decimal('saldo_inicial', 12, 2);
+$table->decimal('saldo_actual', 12, 2)->default(0);
+$table->foreignId('tipo_cuenta_id')->constrained('tipo_cuentas');
+$table->foreignUuid('propietario_id')->nullable()->constrained('propietarios')->nullOnDelete();
+$table->text('notas')->nullable();
+$table->boolean('active')->default(true);
+```
+
+Soft-delete support (`SoftDeletes` trait) was added in a later migration, so archived accounts are retained in the database and can be fully restored.
+
+## Account Fields
+
+<ParamField body="nombre" type="string" required>
+  A short display name for the account (max 25 characters).
+</ParamField>
+<ParamField body="saldo_inicial" type="numeric" required>
+  Opening balance at the time of account creation (min 0). Leo Counter uses this as the baseline from which `saldo_actual` is calculated.
+</ParamField>
+<ParamField body="tipo_cuenta_id" type="integer" required>
+  The account type. Seeded types are stored in the `tipo_cuentas` table. Examples include checking, savings, cash, and digital wallets — the exact values depend on your seeder configuration.
+</ParamField>
+<ParamField body="propietario_id" type="uuid" required>
+  The owner of the account. Owners are managed separately at `/propietarios`.
+</ParamField>
+<ParamField body="notas" type="string">
+  Optional free-text notes about this account (max 255 characters).
+</ParamField>
+
+```php
+// app/Http/Requests/Cuenta/StoreAndUpdateCuentaRequest.php
+return [
+    'nombre'        => ['required', 'string', 'max:25'],
+    'saldo_inicial' => ['required', 'numeric', 'min:0'],
+    'tipo_cuenta_id'=> ['required', 'numeric'],
+    'propietario_id'=> ['required', 'string'],
+    'notas'         => ['nullable', 'string', 'max:255'],
+];
+```
+
+## Account Types (TipoCuenta)
+
+Account types are a simple lookup table (`tipo_cuentas`) that classifies how an account behaves. The seeded types are managed by your database seeder. The `TipoCuenta` model stores a single `tipo_cuenta` string field per record.
+
+```php
+// app/Models/TipoCuenta/TipoCuenta.php
+protected $fillable = ['tipo_cuenta'];
+```
+
+<Info>
+  Account types are system-managed. You cannot create or modify them through the UI — they are seeded once when the application is first set up.
+</Info>
+
+## Owners (Propietarios)
+
+Owners allow a household to track which family member or person is responsible for each account. This is especially useful when multiple people use the same Leo Counter instance and you need to separate, say, your personal checking account from a shared household account.
+
+**Owner fields:**
+
+<ParamField body="nombre" type="string" required>
+  First name (max 255 characters).
+</ParamField>
+<ParamField body="apellido" type="string" required>
+  Last name (max 255 characters).
+</ParamField>
+<ParamField body="telefono" type="string" required>
+  Phone number (max 255 characters).
+</ParamField>
+<ParamField body="email" type="email" required>
+  Email address — must be unique across all owners.
+</ParamField>
+
+```php
+// app/Http/Requests/Propietario/StoreAndUpdatePropietarioRequest.php
+return [
+    'nombre'   => 'required|string|max:255',
+    'apellido' => 'required|string|max:255',
+    'telefono' => 'required|string|max:255',
+    'email'    => [
+        'required', 'string', 'email', 'max:255',
+        Rule::unique('propietarios', 'email')->ignore($this->id),
+    ],
+];
+```
+
+### Owner Routes
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/propietarios` | List all owners |
+| GET | `/propietarios/create` | Show creation form |
+| POST | `/propietarios` | Store a new owner |
+| GET | `/propietarios/{id}` | View owner detail |
+| GET | `/propietarios/{id}/edit` | Show edit form |
+| PUT | `/propietarios/{id}` | Update an owner |
+| DELETE | `/propietarios/{id}` | Delete an owner |
+
+## Active / Inactive Toggle
+
+You can pause an account — preventing new movements from being accidentally assigned to it — without deleting it. Use the toggle endpoint:
+
+```
+PATCH /cuentas/{cuenta}/{attribute}/toggle
+```
+
+Where `{attribute}` is `active`. The `ToggleCuentaCommand` is dispatched and flips the boolean flag. Inactive accounts remain visible in the account list but are filtered out of movement creation forms.
+
+```php
+// app/Http/Controllers/Cuenta/CuentaController.php
+public function toggleActive(string $id, string $attribute)
+{
+    $this->dispatcher->dispatch(new ToggleCuentaCommand(
+        id: $id,
+        attribute: $attribute,
+    ));
+    Inertia::flash('success', 'Cuenta actualizada correctamente');
+    return redirect()->route('cuentas.index');
+}
+```
+
+## Soft Deletes and Archiving
+
+Deleting an account via `DELETE /cuentas/{id}` performs a **soft delete** (the destroy handler displays a flash message "Cuenta Archivada correctamente"). The record is moved to the trash and is no longer shown in the main account list. Historical movements linked to that account are retained.
+
+Admins can restore or permanently hard-delete archived accounts from:
+
+```
+GET  /configuracion/deleted/cuentas
+PUT  /configuracion/deleted/cuentas/restore/{id}
+DELETE /configuracion/deleted/cuentas/hard-delete/{id}
+```
+
+<Warning>
+  Hard-deleting an account is irreversible. Any historical movements that reference it will lose their account association.
+</Warning>
+
+## Account Routes
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/cuentas` | List all active accounts |
+| GET | `/cuentas/create` | Show creation form |
+| POST | `/cuentas` | Store a new account |
+| GET | `/cuentas/{id}/edit` | Show edit form |
+| PUT | `/cuentas/{id}` | Update an account |
+| DELETE | `/cuentas/{id}` | Archive (soft-delete) an account |
+| PATCH | `/cuentas/{id}/{attribute}/toggle` | Toggle `active` flag |
+
+## Account Creation Workflow
+
+<Steps>
+  <Step title="Create an owner">
+    Navigate to `/propietarios` and create at least one owner record with a name, surname, phone number, and email. Each account must be assigned to an owner.
+  </Step>
+  <Step title="Open account creation">
+    Go to `/cuentas/create`. The form loads available account types and owners automatically from the `ListCuentaFormOptionsQuery`.
+  </Step>
+  <Step title="Fill in the details">
+    Enter a name (max 25 chars), select the account type, assign an owner, set the opening balance, and optionally add notes.
+  </Step>
+  <Step title="Save the account">
+    Submit the form. Leo Counter creates the account with `saldo_actual` initialized to `saldo_inicial`. The account is immediately available as a target when recording movements.
+  </Step>
+  <Step title="Manage the lifecycle">
+    Use the **active toggle** to pause the account when not in use, and the **delete** action to archive it when it is permanently closed.
+  </Step>
+</Steps>
+
+## Relationship to Movements
+
+Every movement — spontaneous, fixed, or pending — carries a `cuenta_id`. When a movement is saved, Leo Counter automatically adjusts `saldo_actual` on the linked account:
+
+- **Income movements** increase `saldo_actual`.
+- **Expense movements** decrease `saldo_actual`.
+
+When a movement is deleted or updated, the financial impact is recalculated through the `RevertTransactionEffectForCuentaResolver` and `ApplyTransactionEffectForCuentaResolver` services, keeping account balances consistent at all times.

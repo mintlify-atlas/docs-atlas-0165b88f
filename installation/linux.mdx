@@ -1,0 +1,293 @@
+---
+title: "Install Leo Counter on Linux Using the Docker Script"
+sidebarTitle: "Linux"
+description: "Deploy Leo Counter on Linux via install.sh. Covers Docker prerequisites, environment configuration, systemd service setup, and post-install verification steps."
+---
+
+This guide walks you through a full production installation of Leo Counter on any modern Linux distribution — Fedora, Ubuntu, Debian, Arch, and others — using the automated `install.sh` script. By the end you will have a running instance managed by systemd, so Leo Counter starts automatically when your machine boots and can be controlled with standard service commands.
+
+## Prerequisites
+
+Before running the installer, make sure your system satisfies the following requirements.
+
+**Docker Engine** must be installed and the daemon must be running:
+
+```bash
+# Verify Docker is installed
+docker --version
+
+# Start the daemon if it is not running
+sudo systemctl start docker
+
+# Enable it to start on boot
+sudo systemctl enable docker
+```
+
+**Docker Compose v2** must be available as the `docker compose` subcommand (note: no hyphen):
+
+```bash
+docker compose version
+```
+
+<Warning>
+  If `docker compose version` fails, you have Docker Compose v1 (`docker-compose`), which is not compatible with Leo Counter's scripts. Install or upgrade to Docker Compose v2 by following the [official Docker documentation](https://docs.docker.com/compose/install/).
+</Warning>
+
+**Your user must belong to the `docker` group.** Without this, the installer will fail when it tries to contact the Docker daemon without `sudo`:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+Log out and back in (or run `newgrp docker`) for the group change to take effect. Verify with:
+
+```bash
+groups | grep docker
+```
+
+## Installation
+
+<Steps>
+
+<Step title="Clone the Repository">
+
+Open a terminal and clone Leo Counter into the directory where you want it to live permanently. The installer will register this exact path in the systemd unit file, so choose carefully:
+
+```bash
+git clone https://github.com/juanVillamilEchavarria/Leo_Counter-app
+cd Leo_Counter-app
+```
+
+</Step>
+
+<Step title="Grant Execute Permission to the Installer">
+
+```bash
+chmod +x install.sh
+```
+
+</Step>
+
+<Step title="Configure Your .env File">
+
+If no `.env` file exists, the installer copies `.env.example` automatically and then pauses so you can edit it. You can also create it manually before running the installer:
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` in your preferred editor and set at minimum the four critical variables:
+
+```dotenv
+# ── Database ────────────────────────────────────────────────────
+DB_ROOT_PASSWORD=your_secure_root_password
+DB_USERNAME=leo_user
+DB_PASSWORD=your_secure_db_password
+
+# ── Application URL ─────────────────────────────────────────────
+# Use your server's LAN IP or domain name in production
+APP_URL=http://localhost:8080
+```
+
+The full set of relevant variables from `.env.example` is shown below for reference:
+
+```dotenv
+APP_NAME="Leo Counter"
+APP_ENV=local
+APP_KEY=
+APP_DEBUG=false
+APP_URL=http://localhost:8080
+
+DB_CONNECTION=mariadb
+DB_HOST=db
+DB_PORT=3306
+DB_DATABASE=leo_counter_app
+DB_ROOT_PASSWORD=
+DB_USERNAME=
+DB_PASSWORD=
+
+BROADCAST_CONNECTION=reverb
+QUEUE_CONNECTION=redis
+CACHE_STORE=redis
+
+REDIS_CLIENT=phpredis
+REDIS_HOST=redis
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+
+MAIL_MAILER=smtp
+MAIL_HOST=mailhog
+MAIL_PORT=1025
+MAIL_FROM_ADDRESS="leo@leocounter.local"
+
+REVERB_APP_ID=
+REVERB_APP_KEY=
+REVERB_APP_SECRET=
+REVERB_HOST=localhost
+REVERB_PORT=8085
+REVERB_SCHEME=http
+```
+
+<Tip>
+  Generate unique values for `REVERB_APP_ID`, `REVERB_APP_KEY`, and `REVERB_APP_SECRET`. They can be any non-empty random strings for a local deployment. In production, treat them as secrets.
+</Tip>
+
+Save the file. If the installer is already paused waiting for you, press **Enter** to continue. Otherwise proceed to the next step.
+
+</Step>
+
+<Step title="Run the Installer">
+
+```bash
+./install.sh
+```
+
+The script prints a coloured progress log for each phase. A full installation typically takes between three and ten minutes depending on your internet connection and machine speed, because Docker must pull base images and compile the React frontend with Vite.
+
+When finished, the terminal displays a summary:
+
+```text
+============================================================
+   Instalacion completada con exito!
+============================================================
+   Aplicacion:   http://localhost:8080
+   Mailhog:      http://localhost:8025
+   PhpMyAdmin:   http://localhost:8082
+   Reverb WS:    ws://localhost:8085
+============================================================
+```
+
+</Step>
+
+<Step title="Verify the Installation">
+
+Open `http://localhost:8080` in your browser. You should see the Leo Counter registration page. Create your administrator account to complete the setup.
+
+You can also verify that all containers are healthy:
+
+```bash
+docker compose ps
+```
+
+All six containers (`leo_counter_app`, `leo_counter_queue`, `leo_counter_scheduler`, `leo_counter_reverb`, `mariadb_server`, `leo_counter_redis`) should show a status of `Up`.
+
+</Step>
+
+</Steps>
+
+## What `install.sh` Does
+
+<Accordion title="Detailed breakdown of all 13 installer phases">
+
+The script executes the following steps in strict order, aborting with a descriptive error message if any phase fails:
+
+1. **Requirement validation** — Checks that `docker` is in `PATH`, that the Docker daemon is reachable, and that `docker compose` (v2) is available.
+
+2. **`.env` creation** — If no `.env` exists, copies `.env.example` to `.env` and pauses for the operator to fill in credentials.
+
+3. **Storage directory structure** — Creates the directories Laravel requires at runtime: `storage/app/public`, `storage/app/data/movimientos`, `storage/framework/cache/data`, `storage/framework/sessions`, `storage/framework/views`, `storage/logs`, and `bootstrap/cache`. Adds `.gitkeep` files so Git tracks the empty directories.
+
+4. **Base permission adjustment** — Runs `chmod 775` on `storage`, `storage/framework`, `storage/logs`, `storage/app`, and `bootstrap/cache` to ensure the containerised web server can write to them.
+
+5. **Build argument extraction** — Reads `REVERB_APP_KEY`, `REVERB_APP_ID`, `REVERB_APP_SECRET`, `REVERB_HOST`, `REVERB_PORT`, `REVERB_SCHEME`, and `VITE_API_URL` from `.env`. These values are injected as Docker build arguments so Vite can bake the correct WebSocket endpoints into the compiled JavaScript bundle.
+
+6. **Docker image build** — Runs `docker compose build --no-cache` with all extracted build arguments. Building from scratch ensures no stale layers are reused.
+
+7. **Support services start** — Brings up `db` (MariaDB), `redis`, `mailhog`, and `phpmyadmin` with `docker compose up -d`.
+
+8. **Database health wait** — Polls the MariaDB container's health check (`mariadb-admin ping`) every two seconds for up to 60 seconds. Exits with an error and prints the last 20 database log lines if the timeout is exceeded.
+
+9. **Application container start** — Brings up the `app` container (`leo_counter_app`) with `docker compose up -d app` and waits for Apache/PHP to become responsive.
+
+10. **Laravel setup** — Inside the `app` container, runs in sequence:
+    - `php artisan config:clear` (flushes the build-time config cache so `.env` values take effect)
+    - `php artisan migrate --force`
+    - `php artisan db:seed --force`
+    - `php artisan storage:link --force`
+    - `php artisan config:cache`, `route:cache`, `view:cache`, `event:cache`
+
+11. **HTTP health check** — Sends a `curl` request to `http://localhost:8080`. If the response is not HTTP 200 or 302, the script prints the last 30 lines of `storage/logs/laravel.log` as a diagnostic aid.
+
+12. **systemd service registration** — Writes `/etc/systemd/system/leo-counter.service` (using `sudo`), sets the `WorkingDirectory` to the current path, runs `systemctl daemon-reload`, and enables the service so it starts on boot.
+
+13. **Final service start** — Runs `docker compose up -d` to bring up the remaining containers: `queue-worker`, `scheduler`, and `reverb`.
+
+</Accordion>
+
+## Service Ports
+
+| Service | URL / Address | Purpose |
+|---|---|---|
+| Leo Counter App | http://localhost:8080 | Main web interface |
+| PhpMyAdmin | http://localhost:8082 | MariaDB visual admin |
+| Mailhog | http://localhost:8025 | Local email capture |
+| Reverb WebSockets | ws://localhost:8085 | Real-time event bus |
+
+## Maintenance Commands
+
+### Managing the systemd Service
+
+The installer registers `leo-counter.service` with systemd. Use these commands to control the application:
+
+```bash
+# Stop all Leo Counter containers
+sudo systemctl stop leo-counter.service
+
+# Start all containers
+sudo systemctl start leo-counter.service
+
+# Check running status and recent log output
+sudo systemctl status leo-counter.service
+
+# View the systemd journal for the service
+journalctl -u leo-counter.service -f
+```
+
+### Direct Docker Compose Commands
+
+If systemd is unavailable or you prefer working directly with Docker:
+
+```bash
+# Stop all containers
+docker compose down
+
+# Start all containers in detached mode
+docker compose up -d
+
+# Restart a single container (e.g., after an .env change)
+docker compose restart app
+```
+
+### Updating Leo Counter
+
+To pull new code and rebuild:
+
+```bash
+git pull origin main
+docker compose build --no-cache
+docker compose up -d
+docker compose exec -T app php artisan migrate --force
+docker compose exec -T app php artisan config:cache
+docker compose exec -T app php artisan route:cache
+docker compose exec -T app php artisan view:cache
+docker compose exec -T app php artisan event:cache
+```
+
+## Checking Logs
+
+When something goes wrong, the first place to look is the Laravel application log:
+
+```bash
+# Print the full Laravel log from inside the container
+docker compose exec app cat storage/logs/laravel.log
+
+# Stream live output from all containers
+docker compose logs -f app
+
+# Stream only the queue worker logs
+docker compose logs -f queue-worker
+```
+
+<Note>
+  If you see a blank or missing `storage/logs/laravel.log`, the container may not have write access to the `storage` directory. Check that the directory permissions are set correctly (`chmod 775 storage storage/logs`) and that the Docker volume mount is working (`docker compose exec app ls -la storage/logs`).
+</Note>

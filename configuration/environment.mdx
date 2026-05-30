@@ -1,0 +1,347 @@
+---
+title: "Leo Counter Environment Variable Reference"
+sidebarTitle: "Environment"
+description: "Complete reference for Leo Counter's .env configuration file. Covers app settings, database credentials, session config, Reverb WebSockets, mail, and Vite build args."
+---
+
+Leo Counter is configured entirely through a single `.env` file that sits at the root of the project. Before starting the Docker stack for the first time, copy `.env.example` to `.env` and fill in every required value. The application will refuse to boot with a blank `APP_KEY`, and several services — MariaDB, Redis, Reverb, and MailHog — each expect their own credentials or connection details to be present.
+
+<Warning>
+  Never commit your `.env` file to version control. It contains database passwords, the application encryption key, and Reverb secrets. The repository already includes `.env` in `.gitignore`, but double-check before every push.
+</Warning>
+
+## Full .env.example
+
+The block below is the canonical template shipped with the project. Copy it verbatim and then edit the values marked as required.
+
+```ini
+APP_NAME="Leo Counter"
+APP_ENV=local
+APP_KEY=
+APP_DEBUG=false
+APP_URL=http://localhost:8080
+
+APP_LOCALE=es
+APP_FALLBACK_LOCALE=es
+APP_FAKER_LOCALE=es_CO
+
+APP_MAINTENANCE_DRIVER=file
+# APP_MAINTENANCE_STORE=database
+
+# PHP_CLI_SERVER_WORKERS=4
+
+BCRYPT_ROUNDS=12
+
+LOG_CHANNEL=stack
+LOG_STACK=single
+LOG_DEPRECATIONS_CHANNEL=null
+LOG_LEVEL=debug
+
+DB_CONNECTION=mariadb
+DB_HOST=db
+DB_PORT=3306
+DB_DATABASE=leo_counter_app
+DB_ROOT_PASSWORD=
+DB_USERNAME=
+DB_PASSWORD=
+
+SESSION_LIFETIME=120
+SESSION_ENCRYPT=false
+SESSION_PATH=/
+SESSION_DRIVER=cookie
+SESSION_DOMAIN=null
+SANCTUM_STATEFUL_DOMAINS=localhost:8080
+SESSION_SECURE_COOKIE=false
+SESSION_SAME_SITE=lax
+
+BROADCAST_CONNECTION=reverb
+FILESYSTEM_DISK=local
+QUEUE_CONNECTION=redis
+
+CACHE_STORE=redis
+# CACHE_PREFIX=
+
+MEMCACHED_HOST=127.0.0.1
+
+REDIS_CLIENT=phpredis
+REDIS_HOST=redis
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+
+MAIL_MAILER=smtp
+MAIL_HOST=mailhog
+MAIL_PORT=1025
+MAIL_USERNAME=null
+MAIL_PASSWORD=null
+MAIL_ENCRYPTION=null
+MAIL_FROM_ADDRESS="leo@leocounter.local"
+MAIL_FROM_NAME="Leo Counter"
+
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_DEFAULT_REGION=us-east-1
+AWS_BUCKET=
+AWS_USE_PATH_STYLE_ENDPOINT=false
+
+VITE_APP_NAME="${APP_NAME}"
+VITE_API_URL="${APP_URL}"
+VITE_GITHUB_REPOSITORY=https://github.com/juanVillamilEchavarria
+
+REVERB_APP_ID=
+REVERB_APP_KEY=
+REVERB_APP_SECRET=
+REVERB_HOST=localhost
+REVERB_PORT=8085
+REVERB_SCHEME=http
+REVERB_SERVER_PORT=8081
+
+VITE_REVERB_APP_KEY="${REVERB_APP_KEY}"
+VITE_REVERB_HOST="${REVERB_HOST}"
+VITE_REVERB_PORT="${REVERB_PORT}"
+VITE_REVERB_SCHEME="${REVERB_SCHEME}"
+```
+
+---
+
+## App Settings
+
+These variables control the core Laravel application identity and runtime behaviour.
+
+<ParamField path="APP_NAME" type="string" required>
+  The human-readable name of the application. Displayed in the browser tab and injected into Vite via `VITE_APP_NAME`.
+  Default: `"Leo Counter"`
+</ParamField>
+
+<ParamField path="APP_ENV" type="string" required>
+  The environment the app is running in. Use `local` for development and `production` for live deployments. Affects error reporting, caching strategies, and more.
+  Example: `local`
+</ParamField>
+
+<ParamField path="APP_KEY" type="string" required>
+  A 32-character Base64 key used by Laravel to encrypt cookies, sessions, and other payloads. **Must not be left blank.**
+</ParamField>
+
+<Tip>
+  Generate the key with Artisan inside the running container:
+  ```bash
+  docker compose exec app php artisan key:generate
+  ```
+  This writes the value directly into your `.env` file.
+</Tip>
+
+<ParamField path="APP_DEBUG" type="boolean">
+  When `true`, Laravel renders full stack traces in the browser. Set to `false` in any internet-facing deployment.
+  Default: `false`
+</ParamField>
+
+<ParamField path="APP_URL" type="string" required>
+  The full base URL including scheme and port. The Docker stack exposes the app on port `8080`.
+  Default: `http://localhost:8080`
+</ParamField>
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `APP_LOCALE` | Primary locale for translations | `es` |
+| `APP_FALLBACK_LOCALE` | Fallback locale when a string is missing | `es` |
+| `APP_FAKER_LOCALE` | Faker library locale for seeders | `es_CO` |
+| `APP_MAINTENANCE_DRIVER` | How maintenance mode state is stored | `file` |
+| `BCRYPT_ROUNDS` | bcrypt cost factor for password hashing | `12` |
+| `LOG_CHANNEL` | Active log channel | `stack` |
+| `LOG_STACK` | Channels within the stack | `single` |
+| `LOG_LEVEL` | Minimum severity to record | `debug` |
+
+---
+
+## Database
+
+Leo Counter runs on **MariaDB** (LTS image). The `db` hostname below refers to the `db` service defined in `docker-compose.yml`.
+
+<ParamField path="DB_CONNECTION" type="string" required>
+  The Laravel database driver. Must be `mariadb` — do not change this to `mysql`.
+  Default: `mariadb`
+</ParamField>
+
+<ParamField path="DB_HOST" type="string" required>
+  The database hostname. Inside Docker Compose, this is the service name `db`.
+  Default: `db`
+</ParamField>
+
+<ParamField path="DB_PORT" type="integer" required>
+  The MariaDB port. The `db` container listens on `3306` and also exposes it to the host on the same port.
+  Default: `3306`
+</ParamField>
+
+<ParamField path="DB_DATABASE" type="string" required>
+  The name of the database that will be created by MariaDB on first boot.
+  Default: `leo_counter_app`
+</ParamField>
+
+<ParamField path="DB_ROOT_PASSWORD" type="string" required>
+  The MariaDB `root` superuser password. Passed to the container as `MARIADB_ROOT_PASSWORD`.
+</ParamField>
+
+<ParamField path="DB_USERNAME" type="string" required>
+  The non-root database user that the application connects with. Also used by phpMyAdmin (`PMA_USER`).
+</ParamField>
+
+<ParamField path="DB_PASSWORD" type="string" required>
+  Password for `DB_USERNAME`. Also used by phpMyAdmin (`PMA_PASSWORD`).
+</ParamField>
+
+<Note>
+  The phpMyAdmin service at `http://localhost:8082` authenticates with `DB_USERNAME` and `DB_PASSWORD` automatically. No extra configuration is needed.
+</Note>
+
+---
+
+## Session & Auth
+
+<ParamField path="SESSION_DRIVER" type="string">
+  How sessions are stored. The default is `cookie` (encrypted, client-side). Alternatives include `database`, `redis`, or `file`.
+  Default: `cookie`
+</ParamField>
+
+<ParamField path="SESSION_LIFETIME" type="integer">
+  Session duration in minutes before the user is logged out due to inactivity.
+  Default: `120`
+</ParamField>
+
+<ParamField path="SANCTUM_STATEFUL_DOMAINS" type="string" required>
+  Comma-separated list of domains that may make stateful (cookie-based) API requests via Laravel Sanctum. **Must include the host and port from `APP_URL`.**
+  Default: `localhost:8080`
+</ParamField>
+
+<Note>
+  `SANCTUM_STATEFUL_DOMAINS` must exactly match the `host:port` portion of `APP_URL`. If you change `APP_URL` to `http://finance.example.com`, set `SANCTUM_STATEFUL_DOMAINS=finance.example.com`. A mismatch causes authentication to fail silently for Inertia requests.
+</Note>
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `SESSION_ENCRYPT` | Encrypt session contents | `false` |
+| `SESSION_PATH` | Cookie path scope | `/` |
+| `SESSION_DOMAIN` | Cookie domain scope | `null` |
+| `SESSION_SECURE_COOKIE` | Require HTTPS for the session cookie | `false` |
+| `SESSION_SAME_SITE` | SameSite policy (`lax`, `strict`, `none`) | `lax` |
+
+---
+
+## Broadcasting — Laravel Reverb
+
+Leo Counter uses **Laravel Reverb** for real-time WebSocket events. The Reverb server runs as its own Docker service on port `8081` internally and is mapped to `8085` on the host.
+
+<ParamField path="REVERB_APP_ID" type="string" required>
+  A unique identifier for this Reverb application. Any non-empty string works for self-hosted deployments.
+</ParamField>
+
+<ParamField path="REVERB_APP_KEY" type="string" required>
+  The public key used by the JavaScript client to connect to Reverb. Mirrored to `VITE_REVERB_APP_KEY`.
+</ParamField>
+
+<ParamField path="REVERB_APP_SECRET" type="string" required>
+  The server-side secret used to sign Reverb events. Keep this private.
+</ParamField>
+
+<ParamField path="REVERB_HOST" type="string" required>
+  The hostname the browser uses to open the WebSocket connection. For local development this is `localhost`.
+  Default: `localhost`
+</ParamField>
+
+<ParamField path="REVERB_PORT" type="integer" required>
+  The **host-facing** port that the browser connects to. The Docker Compose file maps container port `8081` to host port `8085`.
+  Default: `8085`
+</ParamField>
+
+<ParamField path="REVERB_SERVER_PORT" type="integer">
+  The port Reverb listens on **inside** the container. Must match the `--port` argument in the `reverb` service command (`php artisan reverb:start --port=8081`).
+  Default: `8081`
+</ParamField>
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `REVERB_SCHEME` | Protocol for the WebSocket URL (`http` or `https`) | `http` |
+| `BROADCAST_CONNECTION` | Active broadcast driver | `reverb` |
+| `VITE_REVERB_APP_KEY` | Exposes `REVERB_APP_KEY` to the Vite/React bundle | `${REVERB_APP_KEY}` |
+| `VITE_REVERB_HOST` | Exposes `REVERB_HOST` to the frontend | `${REVERB_HOST}` |
+| `VITE_REVERB_PORT` | Exposes `REVERB_PORT` to the frontend | `${REVERB_PORT}` |
+| `VITE_REVERB_SCHEME` | Exposes `REVERB_SCHEME` to the frontend | `${REVERB_SCHEME}` |
+
+---
+
+## Queue & Cache
+
+<Tabs>
+  <Tab title="Queue">
+    | Variable | Purpose | Default |
+    |---|---|---|
+    | `QUEUE_CONNECTION` | Driver for queued jobs | `redis` |
+
+    Jobs are processed by the `queue-worker` Docker service, which runs `php artisan queue:work --sleep=3 --tries=3 --max-time=3600`. No extra configuration is needed beyond a working Redis connection.
+  </Tab>
+  <Tab title="Cache">
+    | Variable | Purpose | Default |
+    |---|---|---|
+    | `CACHE_STORE` | Active cache driver | `redis` |
+    | `CACHE_PREFIX` | Optional key prefix (commented out) | — |
+  </Tab>
+  <Tab title="Redis">
+    | Variable | Purpose | Default |
+    |---|---|---|
+    | `REDIS_CLIENT` | PHP Redis client library | `phpredis` |
+    | `REDIS_HOST` | Redis hostname (Docker service name) | `redis` |
+    | `REDIS_PASSWORD` | Redis password (`null` = no auth) | `null` |
+    | `REDIS_PORT` | Redis port | `6379` |
+  </Tab>
+</Tabs>
+
+---
+
+## Mail
+
+Leo Counter ships with **MailHog** for local development email capture. All outbound mail is intercepted and viewable at `http://localhost:8025`.
+
+<ParamField path="MAIL_MAILER" type="string">
+  The transport driver. `smtp` for MailHog; change to `ses`, `sendmail`, or `log` in production.
+  Default: `smtp`
+</ParamField>
+
+<ParamField path="MAIL_HOST" type="string">
+  SMTP server hostname. `mailhog` resolves to the MailHog Docker service.
+  Default: `mailhog`
+</ParamField>
+
+<ParamField path="MAIL_PORT" type="integer">
+  SMTP port. MailHog listens on `1025` for SMTP and `8025` for its web UI.
+  Default: `1025`
+</ParamField>
+
+<ParamField path="MAIL_FROM_ADDRESS" type="string">
+  The `From:` address on all outgoing emails.
+  Default: `"leo@leocounter.local"`
+</ParamField>
+
+<ParamField path="MAIL_FROM_NAME" type="string">
+  The display name in the `From:` header.
+  Default: `"Leo Counter"`
+</ParamField>
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `MAIL_USERNAME` | SMTP auth username | `null` |
+| `MAIL_PASSWORD` | SMTP auth password | `null` |
+| `MAIL_ENCRYPTION` | TLS/SSL setting | `null` |
+
+---
+
+## Vite Build Variables
+
+These variables are injected into the React frontend bundle at build time by Vite. They mirror their server-side counterparts.
+
+| Variable | Mirrors | Purpose |
+|---|---|---|
+| `VITE_APP_NAME` | `APP_NAME` | App name exposed to React components |
+| `VITE_API_URL` | `APP_URL` | Base URL for API calls from the frontend |
+| `VITE_GITHUB_REPOSITORY` | — | Link to the author's GitHub profile, used in the UI |
+
+<Info>
+  Vite variables must be prefixed with `VITE_` to be accessible in React code via `import.meta.env.VITE_*`. Server-side variables without this prefix are never sent to the browser.
+</Info>

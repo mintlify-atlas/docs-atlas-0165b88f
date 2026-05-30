@@ -1,0 +1,274 @@
+---
+title: "Install Leo Counter on Windows with Docker Desktop"
+sidebarTitle: "Windows"
+description: "Deploy Leo Counter on Windows via Docker Desktop and install.ps1. Covers prerequisites, .env configuration, and Docker Compose service management commands."
+---
+
+This guide covers a full production installation of Leo Counter on Windows 10 or Windows 11 using Docker Desktop and the `install.ps1` PowerShell script. The script performs the same installation steps as its Linux counterpart — building Docker images, running migrations, seeding the database, and optimising Laravel — with one difference: systemd is not available on Windows, so you manage services with Docker Compose commands directly.
+
+## Prerequisites
+
+### Docker Desktop
+
+Download and install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/) from the official Docker website. After installation:
+
+1. Launch Docker Desktop from the Start menu.
+2. Wait for the whale icon in the system tray to show a solid green dot, indicating the engine is running.
+3. Open a terminal and confirm Docker is reachable:
+
+```powershell
+docker --version
+docker compose version
+```
+
+### PowerShell 5.1 or Higher
+
+Windows 10 and 11 ship with Windows PowerShell 5.1. You can verify your version with:
+
+```powershell
+$PSVersionTable.PSVersion
+```
+
+PowerShell 7 (cross-platform) also works and is recommended for better error output.
+
+### WSL 2 (Recommended)
+
+<Note>
+  WSL 2 (Windows Subsystem for Linux 2) provides a real Linux kernel for Docker to run against, resulting in significantly faster file I/O and better container performance compared to the Hyper-V backend. Enable it before installing Docker Desktop for the best experience:
+
+  ```powershell
+  wsl --install
+  ```
+
+  Then restart your machine. Docker Desktop will automatically detect and use the WSL 2 engine.
+</Note>
+
+## Installation
+
+<Warning>
+  You must run PowerShell **as Administrator** for the installer to work correctly. Right-click the PowerShell icon and select **Run as administrator**, or search for PowerShell in the Start menu, then choose **Run as administrator** from the right-hand panel.
+</Warning>
+
+<Steps>
+
+<Step title="Clone the Repository">
+
+Open an elevated PowerShell window and navigate to the directory where you want to install Leo Counter. Then clone the repository:
+
+```powershell
+git clone https://github.com/juanVillamilEchavarria/Leo_Counter-app
+cd Leo_Counter-app
+```
+
+</Step>
+
+<Step title="Allow Local Script Execution">
+
+Windows blocks unsigned scripts by default. Temporarily allow local scripts for the current PowerShell session:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+```
+
+This setting applies only to the current session and does not permanently change your system policy.
+
+</Step>
+
+<Step title="Configure Your .env File">
+
+If no `.env` file exists, the installer copies `.env.example` automatically and prompts you to edit it. You can also do this manually before running the installer:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+Set at minimum the four critical variables:
+
+```dotenv
+# ── Database ────────────────────────────────────────────────────
+DB_ROOT_PASSWORD=your_secure_root_password
+DB_USERNAME=leo_user
+DB_PASSWORD=your_secure_db_password
+
+# ── Application URL ─────────────────────────────────────────────
+APP_URL=http://localhost:8080
+```
+
+The relevant sections from `.env.example` are shown below for reference:
+
+```dotenv
+APP_NAME="Leo Counter"
+APP_ENV=local
+APP_KEY=
+APP_DEBUG=false
+APP_URL=http://localhost:8080
+
+DB_CONNECTION=mariadb
+DB_HOST=db
+DB_PORT=3306
+DB_DATABASE=leo_counter_app
+DB_ROOT_PASSWORD=
+DB_USERNAME=
+DB_PASSWORD=
+
+BROADCAST_CONNECTION=reverb
+QUEUE_CONNECTION=redis
+CACHE_STORE=redis
+
+REDIS_CLIENT=phpredis
+REDIS_HOST=redis
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+
+MAIL_MAILER=smtp
+MAIL_HOST=mailhog
+MAIL_PORT=1025
+MAIL_FROM_ADDRESS="leo@leocounter.local"
+
+REVERB_APP_ID=
+REVERB_APP_KEY=
+REVERB_APP_SECRET=
+REVERB_HOST=localhost
+REVERB_PORT=8085
+REVERB_SCHEME=http
+```
+
+Save the file. If the installer is already waiting for you, press **Enter** at the prompt to continue.
+
+</Step>
+
+<Step title="Run the Installer">
+
+```powershell
+.\install.ps1
+```
+
+The script prints a colour-coded progress log for each phase. Installation typically takes between three and ten minutes, as Docker must pull base images and compile the React frontend with Vite.
+
+When the installer finishes, you will see a summary:
+
+```text
+============================================================
+   Instalación completada con éxito!
+============================================================
+   Aplicación:   http://localhost:8080
+   Mailhog:      http://localhost:8025
+   PhpMyAdmin:   http://localhost:8082
+   Reverb WS:    ws://localhost:8085
+============================================================
+  Para detener:   docker compose down
+  Para los logs:  docker compose logs -f app
+  Para el error:  docker compose exec app cat storage/logs/laravel.log
+============================================================
+```
+
+</Step>
+
+<Step title="Verify the Installation">
+
+Open your browser and navigate to `http://localhost:8080`. You should see the Leo Counter registration page. Create your administrator account to complete the setup.
+
+You can also verify container health from PowerShell:
+
+```powershell
+docker compose ps
+```
+
+All six containers should show a status of `Up`:
+
+| Container | Role |
+|---|---|
+| `leo_counter_app` | Laravel + Apache (main app) |
+| `leo_counter_queue` | Background queue worker |
+| `leo_counter_scheduler` | Laravel task scheduler |
+| `leo_counter_reverb` | Reverb WebSocket server |
+| `mariadb_server` | MariaDB database |
+| `leo_counter_redis` | Redis cache and queues |
+
+</Step>
+
+</Steps>
+
+## What `install.ps1` Does
+
+The PowerShell script mirrors the Linux `install.sh` flow, adapted for Docker Desktop and PowerShell idioms:
+
+1. **Requirement validation** — Checks that `docker` is available in `PATH` and that Docker Desktop is running.
+2. **`.env` creation** — Copies `.env.example` to `.env` if absent and pauses for credentials.
+3. **Storage directory creation** — Creates `storage/app/public`, `storage/app/data/movimientos`, `storage/framework/cache/data`, `storage/framework/sessions`, `storage/framework/views`, `storage/logs`, and `bootstrap/cache`. Adds `.gitkeep` files via `Out-File`.
+4. **Build argument extraction** — Uses a custom `Get-EnvValue` function that handles quoted values and trailing spaces to reliably parse `REVERB_APP_KEY`, `REVERB_APP_ID`, `REVERB_APP_SECRET`, `REVERB_HOST`, `REVERB_PORT`, `REVERB_SCHEME`, and `VITE_API_URL` from `.env`.
+5. **Docker image build** — Runs `docker compose build --no-cache` with all extracted values as `--build-arg` flags, so Vite bakes the correct WebSocket endpoint into the compiled JavaScript.
+6. **Support services start** — Brings up `db`, `redis`, `mailhog`, and `phpmyadmin` with `docker compose up -d`.
+7. **Database health wait** — Polls the MariaDB container's health status every two seconds for up to 60 seconds.
+8. **Application container start** — Starts the `app` container and waits for PHP to become responsive.
+9. **Laravel setup** — Runs inside the container: `config:clear`, `migrate --force`, `db:seed --force`, `storage:link --force`, then `config:cache`, `route:cache`, `view:cache`, and `event:cache`.
+10. **HTTP health check** — Uses `Invoke-WebRequest` to verify the app responds with HTTP 200 or 302.
+11. **Final service start** — Runs `docker compose up -d` to bring up `queue-worker`, `scheduler`, and `reverb`.
+
+<Note>
+  Unlike the Linux installer, `install.ps1` does **not** register a systemd service, because systemd is not available on Windows. Use the Docker Compose commands in the next section to manage the application lifecycle.
+</Note>
+
+## Service Ports
+
+| Service | URL / Address | Purpose |
+|---|---|---|
+| Leo Counter App | http://localhost:8080 | Main web interface |
+| PhpMyAdmin | http://localhost:8082 | MariaDB visual admin |
+| Mailhog | http://localhost:8025 | Local email capture |
+| Reverb WebSockets | ws://localhost:8085 | Real-time event bus |
+
+## Managing Services
+
+Because systemd is not available on Windows, use Docker Compose commands to start and stop Leo Counter:
+
+```powershell
+# Stop all containers
+docker compose down
+
+# Start all containers in detached (background) mode
+docker compose up -d
+
+# Restart a single container (e.g., after editing .env)
+docker compose restart app
+
+# View the status of all containers
+docker compose ps
+```
+
+To have Leo Counter start automatically when Windows boots, you can configure Docker Desktop to launch at startup (**Settings → General → Start Docker Desktop when you sign in to your computer**). Once Docker Desktop is running, you can add a Task Scheduler entry that runs `docker compose up -d` from the project directory on logon.
+
+## Updating Leo Counter
+
+To pull new code and rebuild:
+
+```powershell
+git pull origin main
+docker compose build --no-cache
+docker compose up -d
+docker compose exec -T app php artisan migrate --force
+docker compose exec -T app php artisan config:cache
+docker compose exec -T app php artisan route:cache
+docker compose exec -T app php artisan view:cache
+docker compose exec -T app php artisan event:cache
+```
+
+## Checking Logs
+
+When something goes wrong, inspect the Laravel application log first:
+
+```powershell
+# Print the Laravel log from inside the running container
+docker compose exec app cat storage/logs/laravel.log
+
+# Stream live output from the main app container
+docker compose logs -f app
+
+# Stream live output from the queue worker
+docker compose logs -f queue-worker
+```
+
+<Warning>
+  If you see `error during connect` or `The system cannot find the file specified`, Docker Desktop is not running. Open Docker Desktop from the Start menu and wait for the engine to become ready before retrying.
+</Warning>

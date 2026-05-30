@@ -1,0 +1,274 @@
+---
+title: "Leo Counter Architecture: DDD, CQRS, and Clean Code"
+sidebarTitle: "Architecture"
+description: "Leo Counter follows Domain-Driven Design with CQRS and Clean Architecture. Each domain has Domains, Application, and Infrastructure layers with a shared CQRS command and query bus."
+---
+
+Leo Counter is organized around Domain-Driven Design (DDD), Command Query Responsibility Segregation (CQRS), and Clean Architecture principles. The codebase is deliberately structured so that business rules live in isolation from framework and persistence concerns, making each layer independently testable and long-term maintainable. The `app/` directory is divided into four top-level namespaces — `Domains`, `Application`, `Infrastructure`, and `Http` — plus a `Shared` kernel and `Providers` directory that wires everything together through Laravel's service container.
+
+## Top-Level Layer Overview
+
+<CardGroup cols={2}>
+  <Card title="Domains" icon="sitemap">
+    Pure business logic: aggregates, value objects, domain events, domain service contracts, and repository interfaces. No Laravel or Eloquent imports.
+  </Card>
+  <Card title="Application" icon="gears">
+    Use-case orchestration via Commands, Queries, DTOs, Handlers, Validators, Mappers, EventHandlers, and Resolvers.
+  </Card>
+  <Card title="Infrastructure" icon="database">
+    Eloquent implementations of repository contracts, query executors, framework event handlers, and external-service adapters.
+  </Card>
+  <Card title="Http" icon="globe">
+    Thin Laravel controllers, form request validators, and API resources. Controllers delegate immediately to the Application layer via the CQRS bus.
+  </Card>
+</CardGroup>
+
+## Domain Modules
+
+Leo Counter is split into self-contained domain modules. Each module appears in `app/Domains/`, `app/Application/`, `app/Infrastructure/`, and `app/Http/` under the same name.
+
+| Module | Responsibility |
+|---|---|
+| `Movimiento` | Core financial transaction recording (income, expense, transfer) |
+| `MovimientoFijo` | Recurring fixed transactions processed automatically each day |
+| `MovimientoPendiente` | Pending/deferred transactions awaiting confirmation |
+| `Presupuesto` | Monthly budget tracking and limit enforcement |
+| `Cuenta` | Bank and cash account management |
+| `Categoria` | Expense and income category management |
+| `Reporte` | Financial report generation with KPIs, distributions, and comparatives |
+| `Notificacion` | In-app and email notifications with real-time WebSocket broadcasting |
+| `Usuario` | User profile and credential management |
+| `Auth` | Authentication flow (login, registration, password reset) |
+| `Configuracion` | System-wide settings and soft-delete recovery management |
+| `Propietario` | Household owner/co-owner management |
+| `Home` | Dashboard data aggregation and summary queries |
+| `ArchivoMovimiento` | CSV/spreadsheet movement file upload and processing |
+
+## Layer Details
+
+### Domains Layer (`app/Domains/`)
+
+The domain layer contains only business concepts. It has no dependency on Laravel, Eloquent, or any infrastructure concern.
+
+<Accordion title="What lives in the Domains layer">
+- **Aggregates** — Rich domain entities that encapsulate state and enforce invariants. Example: `Movimiento`, `Cuenta`, `Presupuesto`.
+- **Value Objects** — Immutable types that describe domain concepts without identity. Example: `MovimientoId`, `RevertTransactionEffectForCuentaResultVO`.
+- **Domain Events** — Events raised when significant state changes occur (e.g., a `Movimiento` is stored or a `MovimientoFijo` triggers).
+- **Contracts / Repository Interfaces** — PHP interfaces that define what persistence operations the domain needs, without specifying how.
+- **Domain Strategies** — Strategy pattern implementations for domain rules such as transaction application and reversion logic (`Movimiento/Strategies/Transaction/Apply`, `.../Revert`).
+- **Exceptions** — Domain-specific exceptions that communicate business rule violations.
+</Accordion>
+
+### Application Layer (`app/Application/`)
+
+The application layer coordinates domain objects and infrastructure services to fulfill use cases. It defines the CQRS messages and their handlers.
+
+<Accordion title="What lives in the Application layer">
+- **Commands** — Immutable data objects representing write intentions (e.g., `StoreMovimientoCommand`, `DestroyMovimientoCommand`, `UpdateMovimientoCommand`).
+- **Command Handlers** — Classes that receive a `Command` from the `CommandBus`, orchestrate domain objects, and persist via repository contracts (e.g., `StoreMovimientoHandler`, `UpdateMovimientoHandler`).
+- **Queries** — Immutable data objects representing read requests (e.g., `ListMovimientoForTableQuery`, `GetMovimientoForEditQuery`, `CheckEnoughBalanceQuery`).
+- **Query Handlers** — Classes that receive a `Query` from the `QueryBus` and return a result without side effects (e.g., `ListMovimientoForTableHandler`, `GetMovimientoForShowHandler`).
+- **DTOs** — Data Transfer Objects that carry structured data between layers.
+- **EventHandlers** — React to domain events raised in other modules (cross-cutting concerns such as updating balances after a `Movimiento` is stored).
+- **Validators** — Application-level business validation beyond form request validation.
+- **Mappers** — Convert between domain aggregates and DTOs or persistence models.
+- **Resolvers** — Select the correct strategy or handler at runtime based on context.
+</Accordion>
+
+### Infrastructure Layer (`app/Infrastructure/`)
+
+The infrastructure layer provides concrete implementations of the contracts defined in the domain and application layers.
+
+<Accordion title="What lives in the Infrastructure layer">
+- **Eloquent Repositories** — Implement `Domains/{Module}/Contracts/Repositories` using Laravel's Eloquent ORM. Example: `Infrastructure/Movimiento/Persistence/Repositories/Eloquent/EloquentMovimientoRepository.php`.
+- **Query Executors** — Implement `Application/{Module}/Contracts/Queries/Executors` using Eloquent or raw query builders for read-optimized queries.
+- **Framework Event Handlers** — Laravel listeners that translate Laravel/Eloquent events into domain events or trigger application commands.
+- **Builders** — Compose complex Eloquent query logic used by query executors.
+- **Broadcasting** — Real-time WebSocket event classes for the Notificacion module, delivered via Laravel Reverb.
+- **External Service Adapters** — Implementations of domain service contracts that call external APIs or framework services (e.g., mail dispatch, file storage).
+</Accordion>
+
+### Http Layer (`app/Http/`)
+
+The HTTP layer is deliberately thin. Controllers validate the incoming HTTP request, extract parameters, dispatch a command or query through the bus, and return a response or Inertia page.
+
+<Accordion title="What lives in the Http layer">
+- **Controllers** — Grouped by domain module under `Http/Controllers/{Module}/`. API controllers live under `Http/Controllers/Api/{Module}/`. Controllers inject the `CommandBus` and `QueryBus` (or specific handlers) through the service container.
+- **Form Requests** — Laravel `FormRequest` classes under `Http/Requests/{Module}/` perform HTTP-level input validation before the controller runs.
+- **API Resources** — Laravel `JsonResource` and `ResourceCollection` classes under `Http/Resources/{Module}/` shape the JSON output for API endpoints.
+- **Middleware** — Shared middleware in `Http/Middleware/`.
+</Accordion>
+
+## CQRS Bus Pattern
+
+Leo Counter's Application layer communicates through a strict command/query bus defined in the Shared kernel.
+
+```php
+// app/Shared/Application/Contracts/Bus/CommandBus.php
+// app/Shared/Application/Contracts/Bus/QueryBus.php
+// app/Shared/Application/Contracts/Bus/EventBus.php
+```
+
+The concrete bus implementations live in the infrastructure layer:
+
+```text
+app/Shared/Infrastructure/Framework/Laravel/Buses/
+├── LaravelCommandBus.php
+├── LaravelQueryBus.php
+└── LaravelEventBus.php
+```
+
+**Commands** represent intent to change state and are dispatched through the `CommandBus`. A controller that wants to store a transaction does this:
+
+```php
+$this->commandBus->dispatch(new StoreMovimientoCommand(...));
+```
+
+**Queries** request data without side effects and are dispatched through the `QueryBus`:
+
+```php
+$result = $this->queryBus->ask(new ListMovimientoForTableQuery(...));
+```
+
+The `ProcessDailyFinancialTasks` Artisan command (`php artisan leo:process-daily-financial-tasks`) also uses the `CommandBus` to dispatch recurring financial processing for fixed and pending transactions, demonstrating that the CQRS pattern extends to scheduled tasks, not only HTTP requests.
+
+## Shared Kernel (`app/Shared/`)
+
+The Shared kernel contains cross-cutting contracts and utilities that any module may depend on without creating inter-module coupling.
+
+```text
+app/Shared/
+├── Application/
+│   ├── Contracts/
+│   │   ├── Bus/             # CommandBus, QueryBus, EventBus interfaces
+│   │   ├── Commands/        # Base command interface
+│   │   ├── Queries/         # Base query interface + executor contracts
+│   │   └── Services/        # Shared application service contracts
+│   ├── DTOs/                # Shared DTO base classes (e.g., file upload DTOs)
+│   ├── Mappers/             # Shared mapping utilities
+│   └── Resolvers/           # Shared resolver base classes
+├── Domain/
+│   ├── ValueObjects/        # Shared value object base classes (Abstracts/)
+│   ├── Services/Financial/  # Financial calculation domain services
+│   └── Contracts/Checkers/  # Generic domain checker interfaces
+└── Infrastructure/
+    ├── AbstractPersistence/ # Abstract Eloquent repository base
+    ├── Framework/Laravel/
+    │   ├── Buses/           # Concrete bus implementations
+    │   ├── Middlewares/     # Shared middleware implementations
+    │   └── Services/        # Auth, file, and notification service implementations
+    └── Queries/             # Shared query builder and executor utilities
+```
+
+## Service Providers and Dependency Injection
+
+Each domain module has one or more service providers under `app/Providers/{Module}/` that bind the domain's repository interfaces to their Eloquent implementations:
+
+```text
+app/Providers/
+├── Movimiento/              # Binds MovimientoRepository → EloquentMovimientoRepository
+├── Categoria/
+│   ├── Application/         # Binds query executors
+│   └── Infrastructure/      # Binds repository contracts
+├── Shared/
+│   ├── Application/Services # Binds CommandBus, QueryBus, EventBus
+│   ├── Domain/              # Binds shared domain contracts
+│   └── Infrastructure/      # Binds shared infrastructure utilities
+└── ...                      # One provider subtree per domain module
+```
+
+This structure means that to swap Eloquent for a different persistence technology in a single module, only the Infrastructure implementations and their provider bindings need to change. Domain logic and application handlers remain untouched.
+
+## Movimiento Module — Full Directory Tree
+
+The Movimiento module is the most complete example of the full DDD/CQRS structure:
+
+```text
+app/
+├── Domains/Movimiento/
+│   ├── Aggregates/
+│   │   └── Movimiento.php
+│   ├── Contracts/
+│   │   ├── Events/
+│   │   ├── Repositories/
+│   │   └── Strategies/
+│   ├── Events/
+│   ├── Exceptions/
+│   ├── Strategies/Transaction/
+│   │   ├── Apply/
+│   │   ├── Revert/
+│   │   └── Validators/
+│   └── ValueObjects/
+│       ├── MovimientoId.php
+│       └── RevertTransactionEffectForCuentaResultVO.php
+│
+├── Application/Movimiento/
+│   ├── Commands/
+│   │   ├── Abstracts/
+│   │   ├── Handlers/
+│   │   │   ├── StoreMovimientoHandler.php
+│   │   │   ├── UpdateMovimientoHandler.php
+│   │   │   ├── DestroyMovimientoHandler.php
+│   │   │   └── RegisterMovimientoFromMovimientoFijoHandler.php
+│   │   ├── StoreMovimientoCommand.php
+│   │   ├── UpdateMovimientoCommand.php
+│   │   ├── DestroyMovimientoCommand.php
+│   │   └── RegisterMovimientoFromMovimientoFijoCommand.php
+│   ├── Queries/
+│   │   ├── Handlers/
+│   │   │   ├── ListMovimientoForTableHandler.php
+│   │   │   ├── GetMovimientoForEditHandler.php
+│   │   │   ├── GetMovimientoForShowHandler.php
+│   │   │   ├── CheckEnoughBalanceHandler.php
+│   │   │   └── ListMovimientoFormOptionsHandler.php
+│   │   ├── ListMovimientoForTableQuery.php
+│   │   ├── GetMovimientoForEditQuery.php
+│   │   ├── GetMovimientoForShowQuery.php
+│   │   └── CheckEnoughBalanceQuery.php
+│   ├── Contracts/Queries/Executors/
+│   ├── DTOs/
+│   ├── EventHandlers/
+│   ├── Exceptions/
+│   ├── Mappers/
+│   ├── Resolvers/
+│   └── Validators/
+│
+├── Infrastructure/Movimiento/
+│   ├── Persistence/Repositories/Eloquent/
+│   │   └── EloquentMovimientoRepository.php
+│   └── Queries/Executors/Eloquent/
+│
+└── Http/
+    ├── Controllers/Movimiento/
+    ├── Requests/MovimientoEspontaneo/
+    └── Resources/Movimiento/
+```
+
+## Frontend Architecture
+
+The React frontend under `resources/js/` mirrors the backend's domain structure. Domain-specific UI logic, API hooks, TypeScript types, and components are grouped by domain:
+
+```text
+resources/js/
+├── app/
+│   └── domains/
+│       ├── movimiento/         types/, components/, columns/
+│       ├── movimientoFijo/     types/, components/, hooks/
+│       ├── movimientoPendiente/
+│       ├── presupuestoMesActual/
+│       ├── presupuestoHistorico/
+│       ├── cuenta/
+│       ├── categoria/
+│       ├── reportes/           api/, components/, hooks/, helpers/
+│       ├── notificacion/       api/, components/, hooks/
+│       ├── home/               api/, components/, hooks/
+│       ├── configuracion/
+│       ├── propietario/
+│       ├── usuario/
+│       ├── auth/               components/, hooks/
+│       └── archivoMovimiento/  types/
+├── Pages/                      # Inertia page components
+└── Layouts/                    # Shared layout wrappers
+```
+
+Each domain folder follows the same convention: `types/` for TypeScript interfaces, `components/` for React UI components, `hooks/` for data-fetching and state hooks, and `api/` for Axios/TanStack Query calls. The `@` alias (configured in `vite.config.ts`) maps to `resources/js/`, making imports consistent across the frontend.

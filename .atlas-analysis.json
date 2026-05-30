@@ -1,0 +1,98 @@
+{
+  "projectType": "saas",
+  "projectName": "Leo Counter",
+  "projectDescription": "Leo Counter is a self-hosted household and small-business finance management platform built with Laravel, React, and Inertia.js, featuring transaction tracking, budgets, accounts, categories, reports, and email notifications.",
+  "theme": "almond",
+  "primaryColor": "#3B82F6",
+  "lightColor": "#EFF6FF",
+  "darkColor": "#1E3A5F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation/linux",
+              "installation/windows"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/dashboard",
+              "features/movements",
+              "features/budgets",
+              "features/accounts",
+              "features/categories",
+              "features/reports",
+              "features/notifications"
+            ]
+          },
+          {
+            "group": "Configuration & Administration",
+            "pages": [
+              "configuration/environment",
+              "configuration/users",
+              "configuration/soft-deletes"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/local-setup",
+              "development/architecture",
+              "development/docker-services",
+              "development/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Transaction management: spontaneous, recurring (fixed), and pending movements with file attachments",
+    "Monthly and historical budget tracking with duplicate and progress features",
+    "Multi-account support with owners (propietarios) and account types",
+    "Category system for income and expense classification",
+    "Financial reports with KPIs, income vs. expense charts, category distribution, and budget usage",
+    "Real-time dashboard powered by Laravel Reverb WebSockets",
+    "Email notification system with subscriber management and email verification",
+    "Role-based access control (admin vs. regular users)",
+    "Self-hosted Docker deployment with systemd service support",
+    "DDD/CQRS/Clean Architecture codebase with Laravel 12 + React 18 (Inertia.js)"
+  ],
+  "publicApiSurface": [
+    "GET /home — Dashboard with KPIs and income/expense trend chart",
+    "GET/POST/PUT/DELETE /cuentas — Accounts CRUD",
+    "PATCH /cuentas/{cuenta}/{attribute}/toggle — Toggle account active state",
+    "GET/POST/PUT/DELETE /propietarios — Account owners CRUD",
+    "GET /movimientos/historicos — Historical movement list",
+    "GET/POST/PUT/DELETE /movimientos-espontaneos — Spontaneous movements CRUD",
+    "GET/POST/PUT/DELETE /movimientos-pendientes — Pending movements CRUD",
+    "PATCH /movimientos-pendientes/{id}/mark-as-done — Mark pending movement as done",
+    "GET/POST/PUT/DELETE /movimientos-fijos — Fixed/recurring movements CRUD",
+    "PATCH /movimientos-fijos/{id}/{attribute}/toggle — Toggle fixed movement active/paused",
+    "GET /movimientos/archivos/{id} — View movement file attachment",
+    "GET /movimientos/archivos/{id}/download — Download movement file attachment",
+    "GET/POST/PUT/DELETE /categorias — Categories CRUD",
+    "GET /reportes — Financial reports (KPIs, charts, budget usage)",
+    "GET /presupuestos/historicos — Historical budgets list",
+    "GET/POST/PUT/DELETE /presupuestos/mes-actual — Current month budgets CRUD",
+    "POST /presupuestos/mes-actual/{id}/duplicate — Duplicate a budget",
+    "GET/POST/PUT/DELETE /pagos-pendientes — Pending payments CRUD",
+    "GET/PUT /profile — User profile management",
+    "GET/PUT /profile/password — Password change",
+    "GET/POST/PUT/DELETE /usuarios — User management (admin only)",
+    "GET /configuracion — App configuration panel (admin only)",
+    "GET/POST/PUT/DELETE /canal-notificaciones — Notification channels management",
+    "GET/POST/DELETE /suscriptor-notificaciones — Notification subscribers management",
+    "GET /configuracion/deleted/{domain} — View soft-deleted records",
+    "PUT /configuracion/deleted/{domain}/restore/{id} — Restore soft-deleted record",
+    "DELETE /configuracion/deleted/{domain}/hard-delete/{id} — Permanently delete record",
+    "Artisan command: php artisan leo:process-daily-financial-tasks"
+  ]
+}

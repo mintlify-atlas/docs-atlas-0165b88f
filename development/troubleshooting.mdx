@@ -1,0 +1,383 @@
+---
+title: "Troubleshooting Leo Counter Installation Issues"
+sidebarTitle: "Troubleshooting"
+description: "Solutions for common Leo Counter issues: 500 errors, database connectivity, Vite HMR, WebSocket connections, queue workers, email delivery, and systemd service failures."
+---
+
+This page collects the most common problems reported when running Leo Counter and explains how to diagnose and fix each one. Most issues fall into one of three categories: configuration not being picked up, a dependent service not starting, or a missing runtime step (migration, link, seed). Work through the relevant accordion below, starting with the log commands, before making any changes.
+
+<Note>
+  If you discover a security vulnerability while troubleshooting, do not open a public issue. Follow the responsible disclosure process described in `SECURITY.md` in the project root.
+</Note>
+
+## Diagnostic Starting Points
+
+Always check the Laravel application log and the container stdout first — they surface the root cause in most cases.
+
+<CodeGroup>
+  ```bash Laravel log (full file)
+  docker compose exec app cat storage/logs/laravel.log
+  ```
+
+  ```bash Container stdout (live tail)
+  docker compose logs -f app
+  ```
+
+  ```bash Development compose log
+  docker compose -f docker-compose.dev.yml logs -f app
+  ```
+
+  ```bash All services at once
+  docker compose logs -f
+  ```
+</CodeGroup>
+
+---
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="1. Error 500 / Application not responding">
+    A 500 response almost always means an unhandled exception in Laravel. The browser receives no useful detail because `APP_DEBUG=false` in production.
+
+    **Step 1:** Read the Laravel log:
+
+    ```bash
+    docker compose exec app cat storage/logs/laravel.log
+    ```
+
+    Look for the most recent `ERROR` or `CRITICAL` entry. Common causes include:
+
+    - `APP_KEY` is empty — run `docker compose exec app php artisan key:generate`
+    - A missing required `.env` variable (database credentials, Reverb key)
+    - A failed migration leaving the schema in a partial state
+    - Storage directory not writable (see the Permissions issue below)
+
+    **Step 2:** Follow the container log in real time and reproduce the request:
+
+    ```bash
+    docker compose logs -f app
+    ```
+
+    **Step 3:** If you need full stack traces, temporarily set `APP_DEBUG=true` in `.env`, then run:
+
+    ```bash
+    docker compose exec app php artisan config:clear
+    ```
+
+    <Warning>
+      Remember to set `APP_DEBUG=false` again before exposing the application to any network other than localhost.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="2. .env changes not reflected">
+    Laravel caches configuration to a compiled file. Editing `.env` after a cache has been written has no effect until the cache is invalidated.
+
+    ```bash
+    # Production
+    docker compose exec app php artisan config:clear
+
+    # Development
+    docker compose -f docker-compose.dev.yml exec app php artisan config:clear
+    ```
+
+    If you also cached routes or views, clear those too:
+
+    ```bash
+    docker compose exec app php artisan route:clear
+    docker compose exec app php artisan view:clear
+    ```
+
+    <Tip>
+      In development mode, configuration is not cached by default. If config changes still do not appear, check that you edited the correct `.env` file — the one in the project root, not a copy elsewhere.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="3. Database connection error">
+    The most common cause is an incorrect `DB_HOST` value. Inside the Docker network, the database container is reachable at the service name `db`, not at `localhost` or `127.0.0.1`.
+
+    Check your `.env`:
+
+    ```ini
+    DB_HOST=db
+    DB_PORT=3306
+    DB_DATABASE=your_database_name
+    DB_USERNAME=your_username
+    DB_PASSWORD=your_password
+    ```
+
+    Verify that the MariaDB container is healthy:
+
+    ```bash
+    docker compose ps
+    ```
+
+    The `db` service should show `healthy` in the Status column. If it shows `starting` wait a few seconds and run again. If it shows `unhealthy`, read its logs:
+
+    ```bash
+    docker compose logs db
+    ```
+
+    Common causes of an unhealthy database container:
+
+    - `DB_ROOT_PASSWORD` is missing or empty in `.env`
+    - The `mariadb_data` volume contains data from a previous installation with different credentials — remove it with `docker volume rm leo_counter-app_mariadb_data` (adjust the prefix to match your project name)
+  </Accordion>
+
+  <Accordion title="4. Migrations not running / tables missing">
+    If you see SQL errors about missing tables, the migrations have not been executed.
+
+    **Run migrations manually:**
+
+    ```bash
+    # Production
+    docker compose exec app php artisan migrate
+
+    # Development
+    docker compose -f docker-compose.dev.yml exec app php artisan migrate
+    ```
+
+    **Check migration status:**
+
+    ```bash
+    docker compose exec app php artisan migrate:status
+    ```
+
+    If a migration is listed as `Pending`, run `php artisan migrate` again. If a migration failed mid-run, check the `laravel.log` for the SQL error, fix the root cause (usually a missing database permission or a credential mismatch), then retry.
+
+    <Note>
+      The `dev.sh` and `dev.ps1` scripts automatically run `php artisan migrate --force` and `php artisan db:seed --force` as part of the initial setup. If you ran the script and still see missing tables, the database container may not have been healthy when the migration step ran. Rerun `php artisan migrate` manually.
+    </Note>
+  </Accordion>
+
+  <Accordion title="5. Permission errors on storage">
+    Apache runs as `www-data` inside the container but the bind-mounted `storage/` directory may be owned by your host user. The `dev.sh` script handles this with:
+
+    ```bash
+    sudo chown -R $USER:$USER storage bootstrap/cache
+    sudo chmod -R 775 storage bootstrap/cache
+    ```
+
+    If you encounter permission errors after the initial setup, fix them inside the container:
+
+    ```bash
+    docker compose -f docker-compose.dev.yml exec app \
+      chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
+    ```
+
+    On Fedora or RHEL with SELinux enforcing, the `dev.sh` script applies the correct context:
+
+    ```bash
+    sudo chcon -Rt container_file_t storage bootstrap/cache
+    ```
+
+    If you created the directories manually after the initial run, apply this context yourself.
+  </Accordion>
+
+  <Accordion title="6. Vite assets not loading in development">
+    If the React UI shows as a blank page or you see asset 404 errors in the browser console, Vite is not serving the compiled assets.
+
+    **Check that the Vite dev server is running:**
+
+    ```bash
+    docker compose -f docker-compose.dev.yml exec app pnpm run dev
+    ```
+
+    This must be running in a separate terminal for HMR to work. If it is running but assets are still missing:
+
+    1. Confirm port `5173` is not blocked by a local firewall.
+    2. Check `vite.config.ts` — the HMR host should be `localhost`:
+
+       ```typescript
+       server: {
+           host: '0.0.0.0',
+           port: 5173,
+           hmr: {
+               host: 'localhost',
+           },
+       },
+       ```
+
+    3. If `pnpm install` has not been run inside the container, dependencies will be missing:
+
+       ```bash
+       docker compose -f docker-compose.dev.yml exec app pnpm install
+       ```
+  </Accordion>
+
+  <Accordion title="7. Reverb WebSocket connection failing">
+    Browser clients connect to the Reverb server at `ws://localhost:8085`. If real-time notifications are not arriving, work through these checks.
+
+    **Verify the Reverb container is running:**
+
+    ```bash
+    docker compose ps
+    ```
+
+    The `leo_counter_reverb` container should be listed and running.
+
+    **Check Reverb logs:**
+
+    ```bash
+    docker compose logs reverb
+    ```
+
+    **Common causes:**
+
+    - `REVERB_APP_KEY` or `REVERB_APP_SECRET` is missing in `.env`. These must be set before the container starts.
+    - Port `8085` on the host is blocked by a firewall or already bound by another process. Check with `ss -tlnp | grep 8085`.
+    - Frontend `.env` values (`VITE_REVERB_APP_KEY`, `VITE_REVERB_HOST`, `VITE_REVERB_PORT`) do not match. After changing them, rebuild assets with `pnpm run build` or restart `pnpm run dev`.
+
+    **Clear config and restart:**
+
+    ```bash
+    docker compose exec app php artisan config:clear
+    docker compose restart reverb
+    ```
+  </Accordion>
+
+  <Accordion title="8. Queue not processing jobs">
+    Background jobs (email sending, file processing, event side effects) are consumed by the `queue-worker` container.
+
+    **Check that the queue worker is running:**
+
+    ```bash
+    docker compose ps
+    ```
+
+    The `leo_counter_queue` container should be listed and running.
+
+    **View queue worker logs:**
+
+    ```bash
+    docker compose logs -f queue-worker
+    ```
+
+    **Check Redis connectivity from the queue worker:**
+
+    ```bash
+    docker compose exec queue-worker php artisan tinker --execute="Redis::ping();"
+    ```
+
+    This should print `+PONG`. If it fails, the `REDIS_HOST` in `.env` is likely not set to `redis` (the container name).
+
+    ```ini
+    REDIS_HOST=redis
+    REDIS_PORT=6379
+    ```
+
+    **View failed jobs:**
+
+    ```bash
+    docker compose exec app php artisan queue:failed
+    ```
+
+    **Retry all failed jobs:**
+
+    ```bash
+    docker compose exec app php artisan queue:retry all
+    ```
+  </Accordion>
+
+  <Accordion title="9. Notifications not sending / emails not arriving">
+    Leo Counter sends notifications via email (through the configured mailer) and in-app via WebSockets. If neither is working, follow this sequence.
+
+    **In development — check Mailhog:**
+
+    Emails are captured at http://localhost:8025. If the inbox is empty, verify the SMTP settings in `.env`:
+
+    ```ini
+    MAIL_MAILER=smtp
+    MAIL_HOST=mailhog
+    MAIL_PORT=1025
+    MAIL_ENCRYPTION=null
+    MAIL_FROM_ADDRESS=noreply@leocounter.local
+    ```
+
+    **Check that the scheduler is running:**
+
+    Notification-related scheduled tasks are triggered by the `scheduler` container. Verify it is running:
+
+    ```bash
+    docker compose ps
+    docker compose logs -f scheduler
+    ```
+
+    **Test scheduled command execution:**
+
+    ```bash
+    docker compose exec app php artisan schedule:run
+    ```
+
+    **Check queue processing** — notifications dispatched asynchronously require the queue worker to be healthy (see issue 8 above).
+
+    **In production — check MAIL_* variables:**
+
+    If you are using Resend (configured via `resend/resend-laravel` in `composer.json`), ensure `MAIL_MAILER=resend` and `RESEND_API_KEY` are set correctly in `.env`.
+  </Accordion>
+
+  <Accordion title="10. leo-counter.service systemd not starting">
+    The `install.sh` script configures a `leo-counter.service` systemd unit on Linux to auto-start Leo Counter on boot.
+
+    **Check the service status:**
+
+    ```bash
+    sudo systemctl status leo-counter.service
+    ```
+
+    **View the full journal log for the service:**
+
+    ```bash
+    sudo journalctl -u leo-counter.service -n 100 --no-pager
+    ```
+
+    **Common causes:**
+
+    - Docker is not running: `sudo systemctl start docker`
+    - The project directory path in the service unit does not match the current path (e.g., after moving the folder). Edit the unit file and reload:
+
+      ```bash
+      sudo systemctl daemon-reload
+      sudo systemctl restart leo-counter.service
+      ```
+
+    - `docker compose` binary not found in the PATH used by the systemd unit. Confirm the path with `which docker` and ensure the unit `ExecStart` uses the full path if needed.
+
+    **Manual start fallback (without systemd):**
+
+    ```bash
+    docker compose up -d
+    ```
+
+    **Stop the service:**
+
+    ```bash
+    sudo systemctl stop leo-counter.service
+    # or without systemd:
+    docker compose down
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Getting Further Help
+
+If none of the above resolves your issue, collect the following before asking for support:
+
+```bash
+# Docker and compose versions
+docker version
+docker compose version
+
+# Container states
+docker compose ps
+
+# Last 50 lines of app log
+docker compose logs --tail=50 app
+
+# Last 50 lines of Laravel log
+docker compose exec app tail -n 50 storage/logs/laravel.log
+```
+
+<Note>
+  For security vulnerabilities, consult `SECURITY.md` in the project root and follow the responsible disclosure process rather than opening a public GitHub issue.
+</Note>

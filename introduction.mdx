@@ -1,0 +1,83 @@
+---
+title: "Leo Counter: Self-Hosted Finance Management Platform"
+sidebarTitle: "Introduction"
+description: "Leo Counter is an open-source, privacy-first finance manager for households and small businesses. Runs entirely on your own Docker infrastructure."
+---
+
+Leo Counter is a self-hosted, open-source financial management platform designed so that households and small businesses can maintain complete, sovereign control over their economic data. Every record — from bank accounts and budget categories to recurring transactions and monthly reports — lives exclusively on your own infrastructure. Nothing is ever transmitted to a third-party cloud; your finances are yours alone.
+
+Built in memory of Engineer Leonardo Villamil Gamba, Leo Counter reflects months of dedicated engineering guided by the highest software-design principles: Domain-Driven Design (DDD), CQRS, Clean Architecture, and SOLID. The result is a modular, extensible codebase that can run reliably for years on everything from a spare laptop to a dedicated home server.
+
+## What Leo Counter Does
+
+Leo Counter integrates several financial modules into a single, cohesive interface. Instead of juggling spreadsheets or trusting SaaS apps with sensitive data, you get a fully featured platform with:
+
+- **Movements & Sub-groups** — Record income and expense transactions, grouped by custom sub-categories for granular tracking.
+- **Budgets** — Define monthly or periodic spending limits per category and receive alerts when you approach or exceed them.
+- **Accounts** — Manage multiple bank accounts, cash wallets, or savings funds in one place.
+- **Categories** — Create a hierarchical taxonomy that matches your real financial life.
+- **Reports** — Generate and export detailed financial summaries as PDFs with one click (powered by DomPDF).
+- **Real-Time Dashboard** — Live charts and balance indicators update instantly via WebSockets (Laravel Reverb + Laravel Echo).
+- **Email Alerts** — Automated notifications delivered through a configurable SMTP server (Mailhog for local testing, any SMTP in production).
+- **Role-Based Access Control (RBAC)** — Assign user roles with distinct permissions so that multiple household members can share a single instance safely.
+
+## Privacy-First, Self-Hosted
+
+Leo Counter's entire value proposition rests on one principle: **your financial data never leaves your network**. There is no telemetry, no analytics beacon, and no vendor lock-in. Because the project is fully open-source and deployed via Docker Compose, you can inspect every line of code, customize the stack, and migrate or back up your data at any time.
+
+## Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Backend framework | Laravel 12 (PHP ^8.2) |
+| Frontend | React 18 + Inertia.js 2 |
+| Build tool | Vite 7 |
+| Database | MariaDB LTS |
+| Cache & queue | Redis (Alpine) |
+| Real-time events | Laravel Reverb + Laravel Echo |
+| PDF export | barryvdh/laravel-dompdf |
+| UI primitives | Radix UI, Tailwind CSS 4, Recharts |
+| Architecture | DDD · CQRS · Clean Architecture · SOLID |
+| Testing | Pest 4 + Pest Laravel plugin |
+
+## System Requirements
+
+Before installing Leo Counter you need the following software already present on your host machine:
+
+<Tabs>
+  <Tab title="Linux">
+    - **Docker Engine** — installed and running (`sudo systemctl start docker`)
+    - **Docker Compose v2** — available as `docker compose` (note: no hyphen)
+    - Your user must belong to the `docker` group. Add yourself with:
+      ```bash
+      sudo usermod -aG docker $USER
+      ```
+      Then log out and back in for the change to take effect.
+  </Tab>
+  <Tab title="Windows">
+    - **Docker Desktop** — installed and running in the system tray
+    - **PowerShell 5.1 or higher** — ships with Windows 10 / 11
+    - **WSL 2** — recommended for maximum I/O performance (enable via `wsl --install`)
+  </Tab>
+</Tabs>
+
+<Note>
+  Leo Counter does not require PHP, Node.js, Composer, or pnpm to be installed on your host machine. All runtime dependencies are encapsulated inside Docker images built by the installer.
+</Note>
+
+## Where to Go Next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get a running Leo Counter instance and log your first transaction in under five minutes.
+  </Card>
+  <Card title="Linux Installation" icon="linux" href="/installation/linux">
+    Full production deployment guide using the automated `install.sh` script with systemd integration.
+  </Card>
+  <Card title="Windows Installation" icon="windows" href="/installation/windows">
+    Deploy on Windows with Docker Desktop and the `install.ps1` PowerShell script.
+  </Card>
+  <Card title="Core Features" icon="chart-line" href="/introduction#what-leo-counter-does">
+    Explore the full feature set: budgets, accounts, movements, reports, and real-time alerts.
+  </Card>
+</CardGroup>

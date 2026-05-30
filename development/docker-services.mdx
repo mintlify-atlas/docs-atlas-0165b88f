@@ -1,0 +1,335 @@
+---
+title: "Leo Counter Docker Services and Port Reference"
+sidebarTitle: "Docker Services"
+description: "Reference for all Docker Compose services in Leo Counter: app, queue worker, scheduler, Reverb WebSockets, Redis, MariaDB, PhpMyAdmin, and Mailhog with port mappings."
+---
+
+Leo Counter's entire runtime stack — web server, queue processor, task scheduler, WebSocket server, cache, database, database UI, and mail catcher — is defined in Docker Compose files. The production compose file (`docker-compose.yml`) uses a pre-built image. The development compose file (`docker-compose.dev.yml`) rebuilds the image from `Dockerfile.dev` and adds bind mounts so source code changes are visible immediately without image rebuilds.
+
+## Port Reference
+
+| Host Port | Container Port | Service | URL |
+|-----------|---------------|---------|-----|
+| `8080` | `80` | App (Apache) | http://localhost:8080 |
+| `8082` | `80` | PhpMyAdmin | http://localhost:8082 |
+| `8025` | `8025` | Mailhog Web UI | http://localhost:8025 |
+| `1025` | `1025` | Mailhog SMTP | smtp://localhost:1025 |
+| `8085` | `8081` | Reverb WebSockets | ws://localhost:8085 |
+| `3306` | `3306` | MariaDB | — (internal) |
+| `5173` | `5173` | Vite HMR (dev only) | http://localhost:5173 |
+
+## Network
+
+All services join a single bridge network:
+
+```yaml
+networks:
+  leo_network:
+    driver: bridge
+```
+
+Container names are used as hostnames within this network (e.g., the application connects to the database at `DB_HOST=db` and to Reverb at `REVERB_HOST=reverb`).
+
+## Named Volumes
+
+| Volume | Used By | Contents |
+|--------|---------|---------|
+| `mariadb_data` | `db` | MariaDB data directory (`/var/lib/mysql`) |
+| `redis_data` | `redis` | Redis persistence snapshots (`/data`) |
+| `dev_node_modules` | All dev services | pnpm node_modules (dev only) |
+
+---
+
+## Service Reference
+
+### app — Laravel Application
+
+The primary web container. It runs Apache with `mod_rewrite` and serves the Laravel application from `/var/www/html/public`. The document root is configured inside `Dockerfile.dev` and the production `Dockerfile`.
+
+<Tabs>
+  <Tab title="Production">
+    ```yaml
+    app:
+      build:
+        context: .
+        dockerfile: Dockerfile
+        args:
+          - USER=leo
+          - UID=1000
+      image: leo_counter_app
+      container_name: leo_counter_app
+      restart: unless-stopped
+      ports:
+        - "8080:80"
+      volumes:
+        - ./.env:/var/www/html/.env:z
+        - ./storage:/var/www/html/storage:z
+      env_file:
+        - .env
+      depends_on:
+        db:
+          condition: service_healthy
+        redis:
+          condition: service_healthy
+    ```
+
+    In production, only `.env` and `./storage` are mounted. The application source code is baked into the image at build time.
+  </Tab>
+  <Tab title="Development">
+    ```yaml
+    app:
+      build:
+        context: .
+        dockerfile: Dockerfile.dev
+        args:
+          - USER=leo
+          - UID=1000
+      container_name: leo_counter_app
+      restart: unless-stopped
+      ports:
+        - "8080:80"
+        - "5173:5173"
+      volumes:
+        - .:/var/www/html:z
+        - dev_node_modules:/var/www/html/node_modules
+        - ./storage:/var/www/html/storage:z
+    ```
+
+    In development, the full source tree is mounted at `/var/www/html` with `:z` for SELinux relabeling. `node_modules` lives in a named volume to avoid pnpm cross-filesystem hardlink errors. Port `5173` is also exposed for the Vite HMR websocket.
+  </Tab>
+</Tabs>
+
+**Build arguments** injected into `Dockerfile.dev`:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `USER` | `leo` | Non-root system user created inside the container |
+| `UID` | `1000` | UID of the created user (should match your host user) |
+
+<Note>
+  `UID=1000` ensures that files written by the container process match your host user's UID, preventing permission conflicts on the bind-mounted source tree.
+</Note>
+
+---
+
+### queue-worker — Laravel Queue Consumer
+
+Processes background jobs pushed onto the Redis queue. Used for tasks such as sending notification emails, processing file uploads, and handling cross-domain event side effects.
+
+```yaml
+queue-worker:
+  image: leo_counter_app          # production reuses the app image
+  container_name: leo_counter_queue
+  restart: unless-stopped
+  command: php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+  volumes:
+    - ./.env:/var/www/html/.env:z
+    - ./storage:/var/www/html/storage:z
+  environment:
+    - REVERB_HOST=reverb
+    - REVERB_PORT=8081
+    - REVERB_SCHEME=http
+  depends_on:
+    app:
+      condition: service_started
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+```
+
+| Flag | Value | Meaning |
+|------|-------|---------|
+| `--sleep` | `3` | Seconds to sleep when the queue is empty |
+| `--tries` | `3` | Maximum attempts before a job is marked failed |
+| `--max-time` | `3600` | Worker restarts after 3600 seconds (memory leak prevention) |
+
+The worker is configured with `REVERB_HOST=reverb` so that any broadcasting dispatched from a queued job reaches the Reverb container over the internal Docker network.
+
+---
+
+### scheduler — Laravel Task Scheduler
+
+Runs `php artisan schedule:run` every 60 seconds using a simple shell loop. This replaces the traditional cron entry. The scheduler is responsible for triggering the `leo:process-daily-financial-tasks` Artisan command, which processes recurring fixed transactions and pending transactions via the `CommandBus`.
+
+```yaml
+scheduler:
+  image: leo_counter_app
+  container_name: leo_counter_scheduler
+  restart: unless-stopped
+  command: /bin/sh -c "while :; do php artisan schedule:run --no-interaction; sleep 60; done"
+  volumes:
+    - ./.env:/var/www/html/.env:z
+    - ./storage:/var/www/html/storage:z
+  environment:
+    - REVERB_HOST=reverb
+    - REVERB_PORT=8081
+    - REVERB_SCHEME=http
+```
+
+<Info>
+  Like the queue worker, the scheduler receives `REVERB_HOST` and `REVERB_PORT` environment variables so that any notifications dispatched by scheduled tasks are broadcast correctly through the Reverb container.
+</Info>
+
+---
+
+### reverb — Laravel Reverb WebSocket Server
+
+Provides the real-time WebSocket server used by the `Notificacion` domain to push live notifications to connected browser clients. It runs `php artisan reverb:start` bound to `0.0.0.0:8081` inside the container.
+
+```yaml
+reverb:
+  image: leo_counter_app
+  container_name: leo_counter_reverb
+  restart: unless-stopped
+  command: php artisan reverb:start --port=8081 --host=0.0.0.0
+  ports:
+    - "8085:8081"
+  volumes:
+    - ./.env:/var/www/html/.env:z
+    - ./storage:/var/www/html/storage:z
+  depends_on:
+    app:
+      condition: service_started
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+```
+
+Port mapping: the browser connects to `ws://localhost:8085`, which the Docker port binding forwards to container port `8081`. Other backend services (queue worker, scheduler) communicate with Reverb at `http://reverb:8081` over the internal `leo_network`.
+
+<Warning>
+  Ensure `REVERB_APP_KEY` and `REVERB_APP_SECRET` are set in your `.env` before starting the environment. Without these values, `reverb:start` will fail to authenticate broadcasting clients.
+</Warning>
+
+---
+
+### redis — Cache and Queue Backend
+
+Provides the Redis instance used by Laravel for both the queue driver and the application cache.
+
+```yaml
+redis:
+  image: redis:alpine
+  container_name: leo_counter_redis
+  restart: unless-stopped
+  command: >
+    redis-server
+    --maxmemory 256mb
+    --maxmemory-policy allkeys-lru
+    --save 900 1
+  volumes:
+    - redis_data:/data
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+```
+
+| Configuration | Value | Effect |
+|---------------|-------|--------|
+| `--maxmemory` | `256mb` | Caps Redis memory usage |
+| `--maxmemory-policy` | `allkeys-lru` | Evicts least-recently-used keys when memory is full |
+| `--save 900 1` | Every 900 s if ≥1 write | Enables RDB persistence snapshots to `redis_data` |
+
+The `app` and `queue-worker` containers wait for this health check to pass before starting.
+
+---
+
+### db — MariaDB Database
+
+The persistent relational database. Leo Counter uses `mariadb:lts` (Long-Term Support).
+
+```yaml
+db:
+  image: mariadb:lts
+  container_name: mariadb_server
+  restart: unless-stopped
+  environment:
+    MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    MARIADB_DATABASE: ${DB_DATABASE}
+    MARIADB_USER: ${DB_USERNAME}
+    MARIADB_PASSWORD: ${DB_PASSWORD}
+  ports:
+    - "3306:3306"
+  volumes:
+    - mariadb_data:/var/lib/mysql
+  healthcheck:
+    test: ["CMD", "mariadb-admin", "ping", "-h", "localhost"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 20s
+```
+
+The four environment variables are read from `.env`. A `start_period` of 20 seconds is granted before the health check is evaluated, giving MariaDB time to initialize on first boot.
+
+<Warning>
+  Set `DB_HOST=db` in `.env`. The application must connect to the container name `db`, not `localhost` or `127.0.0.1`, because all services share the `leo_network` bridge.
+</Warning>
+
+---
+
+### phpmyadmin — Database Management UI
+
+A browser-based GUI for inspecting and managing the MariaDB database. Connects automatically to the `db` service using the credentials from `.env`.
+
+```yaml
+phpmyadmin:
+  image: phpmyadmin/phpmyadmin
+  container_name: phpmyadmin
+  restart: unless-stopped
+  ports:
+    - "8082:80"
+  environment:
+    PMA_HOST: db
+    PMA_PORT: 3306
+    PMA_USER: ${DB_USERNAME}
+    PMA_PASSWORD: ${DB_PASSWORD}
+  depends_on:
+    db:
+      condition: service_healthy
+```
+
+Access PhpMyAdmin at **http://localhost:8082** after the environment is running.
+
+---
+
+### mailhog — Development Mail Catcher
+
+Captures all outbound email sent by Laravel in development and presents it in a web inbox. No email ever leaves the local machine.
+
+```yaml
+mailhog:
+  image: mailhog/mailhog
+  container_name: mailhog
+  restart: unless-stopped
+  ports:
+    - "1025:1025"   # SMTP
+    - "8025:8025"   # Web UI
+```
+
+Configure Laravel to use Mailhog in `.env`:
+
+```ini
+MAIL_MAILER=smtp
+MAIL_HOST=mailhog
+MAIL_PORT=1025
+MAIL_ENCRYPTION=null
+```
+
+Access the inbox at **http://localhost:8025**.
+
+## Production vs. Development Differences
+
+| Aspect | Production (`docker-compose.yml`) | Development (`docker-compose.dev.yml`) |
+|--------|----------------------------------|----------------------------------------|
+| App image | Pre-built `leo_counter_app` | Built fresh from `Dockerfile.dev` |
+| Source code | Baked into image | Bind-mounted from host (`.:z`) |
+| node_modules | Inside image | Named volume `dev_node_modules` |
+| Vite port | Not exposed | `5173:5173` exposed for HMR |
+| SELinux label | `:z` on `.env` and `storage` | `:z` on entire source and `storage` |
+| Reverb image | Reuses `leo_counter_app` | Rebuilt from `Dockerfile.dev` |
+| Queue/Scheduler | Reuse `leo_counter_app` | Rebuilt from `Dockerfile.dev` |

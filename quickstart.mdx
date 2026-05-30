@@ -1,47 +1,129 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Leo Counter Running and Log Your First Transaction"
+sidebarTitle: "Quickstart"
+description: "Clone, configure, and launch Leo Counter with Docker in a few minutes. Log your first transaction and start tracking your finances immediately."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide takes you from an empty directory to a fully running Leo Counter instance — with your first financial account created and your first movement recorded. All you need is Git and Docker (or Docker Desktop on Windows). No PHP, Node, or Composer installation is required on your host machine.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+<Step title="Clone the Repository">
+
+Open a terminal in the directory where you want to install Leo Counter and clone the repository:
+
+```bash
+git clone https://github.com/juanVillamilEchavarria/Leo_Counter-app
+cd Leo_Counter-app
+```
+
+This downloads the full application source, the Docker Compose configuration, and both installer scripts.
+
+</Step>
+
+<Step title="Run the Installer">
+
+The installer builds Docker images, starts all services, runs database migrations and seeders, optimizes the Laravel application, and — on Linux — registers a systemd service so Leo Counter starts automatically on boot.
+
+<Tabs>
+  <Tab title="Linux">
+    Grant execute permission to the script, then run it:
 
     ```bash
-    npm install your-package
+    chmod +x install.sh
+    ./install.sh
     ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+    The script checks that Docker Engine and Docker Compose v2 are available and that your user belongs to the `docker` group before proceeding.
+  </Tab>
+  <Tab title="Windows">
+    Open **PowerShell as Administrator**, navigate to the project folder, and temporarily allow local script execution:
 
-    ```bash
-    your-cli start
+    ```powershell
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+    .\install.ps1
     ```
-  </Step>
-</Steps>
+
+    Docker Desktop must be running in the background before you start.
+  </Tab>
+</Tabs>
+
+<Note>
+  If no `.env` file exists in the project root, the installer will automatically copy `.env.example` to `.env` and then **pause**, prompting you to edit it before continuing. Set your credentials as described in the next step, save the file, and press **Enter** to let the installer proceed.
+</Note>
+
+</Step>
+
+<Step title="Configure Your Environment">
+
+The four variables below are the minimum you must set before the installer can finish. Open `.env` in any text editor:
+
+```dotenv
+# Database root credential — used internally by MariaDB
+DB_ROOT_PASSWORD=your_secure_root_password
+
+# Application database user credentials
+DB_USERNAME=leo_user
+DB_PASSWORD=your_secure_password
+
+# Public URL where Leo Counter will be reachable
+APP_URL=http://localhost:8080
+```
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  Use a strong, unique password for each credential. These values are injected directly into the MariaDB container and into the Docker build arguments for Vite and Reverb — they are never sent anywhere else.
 </Tip>
+
+The remaining variables in `.env` — such as Reverb WebSocket keys, mail settings, and Redis configuration — come pre-populated with sensible defaults for a local installation and can be adjusted later.
+
+</Step>
+
+<Step title="Access the Application and Register">
+
+Once the installer prints its success banner, all services are running. Open your browser and navigate to the application:
+
+| Service | URL | Purpose |
+|---|---|---|
+| **Leo Counter App** | http://localhost:8080 | Main financial dashboard |
+| **PhpMyAdmin** | http://localhost:8082 | Visual database manager |
+| **Mailhog** | http://localhost:8025 | Captures outgoing emails locally |
+| **Reverb WebSockets** | ws://localhost:8085 | Real-time event connection |
+
+On your first visit to `http://localhost:8080`, you will be presented with a registration form. Create your administrator account by entering a name, email address, and password. This is the primary account with full RBAC privileges.
+
+</Step>
+
+<Step title="Create Your First Account and Record a Movement">
+
+After logging in you will land on the real-time dashboard. Follow these steps to record your first transaction:
+
+1. **Create an Account** — Navigate to **Accounts** in the sidebar and click **New Account**. Give it a name (e.g., "Main Checking"), select a type, and set an opening balance.
+
+2. **Add a Category** — Go to **Categories** and create at least one category (e.g., "Groceries" under "Expenses"). Categories and their sub-groups power the budget and reporting modules.
+
+3. **Record a Movement** — Open **Movements** and click **New Movement**. Select the account, choose Income or Expense, pick the category, enter an amount and date, and save.
+
+The dashboard balance and charts update in real time via the Reverb WebSocket connection — no page refresh needed.
+
+<Info>
+  The database seeder run during installation may have pre-populated some sample categories and roles. You can safely delete or rename them from the admin interface.
+</Info>
+
+</Step>
+
+</Steps>
+
+## What's Running Under the Hood
+
+After a successful installation, Docker Compose manages six containers:
+
+| Container | Role |
+|---|---|
+| `leo_counter_app` | Laravel + Apache serving the Inertia/React frontend |
+| `leo_counter_queue` | Background job worker (`php artisan queue:work`) |
+| `leo_counter_scheduler` | Laravel scheduler (runs `php artisan schedule:run` every 60 s) |
+| `leo_counter_reverb` | Laravel Reverb WebSocket server |
+| `mariadb_server` | MariaDB LTS database |
+| `leo_counter_redis` | Redis (cache, queues, sessions) |
+
+To stop or restart the application see the [Linux installation guide](/installation/linux#maintenance-commands) or the [Windows installation guide](/installation/windows#managing-services).

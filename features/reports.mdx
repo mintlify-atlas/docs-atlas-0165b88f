@@ -1,0 +1,204 @@
+---
+title: "Financial Reports and Analytics in Leo Counter"
+sidebarTitle: "Reports"
+description: "Generate financial reports in Leo Counter with KPI cards, income vs. expense charts, category distribution, and budget usage. Filter by period, category, and account."
+---
+
+The reports module at `/reportes` is the analytical heart of Leo Counter. It combines every movement, category, account, and budget record into a single interactive view that covers KPI summary cards, time-series trend charts, a category distribution pie chart, a net balance line chart, and a budget consumption bar. All sections update immediately when you change the active filters — no page reload required.
+
+## How Reports Are Generated
+
+The `ReporteController` renders the Inertia page and seeds the initial data. The `useReporteApi` hook then takes over client-side, calling the report API endpoint which dispatches `GenerateFinancialReportQuery` through `GenerateReportHandler`. That handler runs multiple assemblers in parallel:
+
+- **KPIAssembler** → `PeriodKPIDTO`
+- **IngresosVsGastosAssembler** → `IngresosVsGastosDTO`
+- **BalanceNetoAssembler** → raw balance series
+- **CategoryDistributionAssembler** → `FullCategoryDistributionDTO`
+- **UsedBudgetAssembler** → `UsedBudgetDTO`
+
+The React page destructures `{ KPIs, tendencia, distribuiciones }` from the API response and passes them to the `KPISection` and `ChartSection` components.
+
+```tsx
+// resources/js/Pages/Reportes/Reporte.tsx
+const { KPIs, tendencia, distribuiciones } = data.data
+return (
+  <ReporteSection ...>
+    <ActiveReportFilters ... />
+    <DownloadReportButton />
+    <div id={ReporteDataSectionId}>
+      <KPISection kpis={KPIs} />
+      <ChartSection tendencia={tendencia} distribuciones={distribuiciones} />
+    </div>
+  </ReporteSection>
+)
+```
+
+## KPI Cards
+
+The `KPISection` renders four primary metric cards sourced from `PeriodKPIDTO`:
+
+<CardGroup cols={2}>
+  <Card title="Total Income" icon="arrow-up-right">
+    Sum of all income movements (`totalIngresos`) in the selected period, with a percentage change badge comparing against the prior equivalent period.
+  </Card>
+  <Card title="Total Expenses" icon="arrow-down-right">
+    Sum of all expense movements (`totalGastos`) in the selected period, with a period-over-period variation indicator.
+  </Card>
+  <Card title="Net Balance" icon="scale-balanced">
+    `balance_neto = ingresos − gastos`. Shows whether the period ended in surplus or deficit, including the percentage variation vs. the prior period.
+  </Card>
+  <Card title="Movement Count" icon="list-check">
+    Total number of movements recorded (`totalMovimientos`) with a count variation badge.
+  </Card>
+</CardGroup>
+
+```php
+// app/Application/Reporte/DTOs/Movimientos/KPI/TotalsKPIDTO.php
+public function __construct(
+    public float $ingresos,
+    public float $gastos,
+    public float $balance_neto,
+    public int   $movimientos,
+) {}
+
+// app/Application/Reporte/DTOs/Movimientos/KPI/VariationsKPIDTO.php
+public function __construct(
+    public ?float $ingresos,
+    public ?float $gastos,
+    public ?float $balance_neto,
+    public ?float $movimientos
+) {}
+```
+
+Variation values are `null` when there is no prior period data to compare against.
+
+## Charts
+
+### Income vs. Expense (Trend Chart)
+
+The `IngresosVsGastosAssembler` produces an `IngresosVsGastosDTO` that includes both a time-series breakdown (`data`) and a set of averages (`promedios`):
+
+```php
+// app/Application/Reporte/DTOs/Movimientos/Averages/PromedioDTO.php
+public function __construct(
+    public ?float $ingresos_por_periodo,
+    public ?float $gastos_por_periodo,
+    public ?float $ingresos_por_movimiento,
+    public ?float $gastos_por_movimiento
+) {}
+```
+
+The chart renders income and expense as two series over time. The granularity (daily, weekly, monthly) is resolved automatically by `ReportGranularityResolver` based on the selected date range.
+
+### Net Balance Line Chart
+
+The `BalanceNetoAssembler` extracts the balance series (`BALANCE_NETO`) from the query result and passes it directly to the chart, drawing a single line that shows whether your household was in surplus or deficit at each point in the period.
+
+### Category Distribution (Pie Chart)
+
+The `CategoryDistributionAssembler` groups movements by category and returns a `FullCategoryDistributionDTO`:
+
+```php
+// app/Application/Reporte/Assemblers/Movimientos/CategoryDistributionAssembler.php
+return new FullCategoryDistributionDTO(
+    $categoryCollection,
+    $categoryCollection->totalMovimientos()
+);
+```
+
+The pie chart uses each category's share of total movements to draw proportional slices, making it easy to see which spending areas dominate the period.
+
+### Budget Percentage Chart
+
+The `UsedBudgetAssembler` compares actual spending to budgeted targets:
+
+```php
+// app/Application/Reporte/DTOs/Presupuestos/Used/UsedBudgetDTO.php
+public function __construct(
+    public float $gastado,
+    public float $presupuestado,
+    public float $porcentaje_usado,
+    public float $disponible
+) {}
+```
+
+A horizontal bar chart renders one bar per budgeted category, filled proportionally to `porcentaje_usado`. Bars that exceed 100 % are highlighted to flag over-budget categories.
+
+## Filters
+
+The filter sheet lets you narrow the report to a specific time window, a subset of categories, or a specific account. Filter values are validated by `GenerateReporteRequest`:
+
+```php
+// app/Http/Requests/Reporte/GenerateReporteRequest.php
+return [
+    'startDate'            => ['required', 'date'],
+    'endDate'              => ['required', 'date'],
+    'categorias'           => ['nullable', 'array'],
+    'cuentas'              => ['nullable', 'array'],
+    'only_categorias_fijas'=> ['required', 'boolean'],
+];
+```
+
+<CardGroup cols={3}>
+  <Card title="Period" icon="calendar">
+    Set `startDate` and `endDate` to focus on any date range — a single week, a quarter, or a full year.
+  </Card>
+  <Card title="Categories" icon="tag">
+    Select one or more categories to include. Leave empty to include all. Enable `only_categorias_fijas` to show only fixed-expense categories.
+  </Card>
+  <Card title="Accounts" icon="building-columns">
+    Filter by one or more accounts to see the report for a specific bank account or cash wallet.
+  </Card>
+</CardGroup>
+
+### Active Filter Display
+
+The `ActiveReportFilters` component renders a pill row showing every currently active filter — period, selected categories, and selected accounts. Each pill has an individual remove button. A **Reset** button clears all filters at once by calling `useResetActiveFilters`.
+
+```tsx
+// resources/js/Pages/Reportes/Reporte.tsx
+<ActiveReportFilters
+  periodo={activeFilters.periodo}
+  categorias={activeFilters.categorias}
+  cuentas={activeFilters.cuentas}
+  onReset={resetFilters}
+  isResetting={isResetting}
+/>
+```
+
+## Downloading Reports
+
+The `DownloadReportButton` component offers two export options:
+
+<CardGroup cols={2}>
+  <Card title="PDF Export" icon="file-pdf">
+    Renders the `ReporteDataSectionId` div server-side using **barryvdh/laravel-dompdf** and streams a PDF file. Ideal for sharing or archiving.
+  </Card>
+  <Card title="Image / PDF (client-side)" icon="image">
+    Uses **html-to-image** and **jsPDF** in the browser to capture the visible report as a PNG or PDF without a server round-trip.
+  </Card>
+</CardGroup>
+
+## How to Use the Reports Module
+
+<Steps>
+  <Step title="Open the filter sheet">
+    Navigate to `/reportes`. Click the filter button to open the filter sheet. Select a date range, optionally narrow by categories and/or accounts, and choose whether to limit to fixed categories only.
+  </Step>
+  <Step title="Apply filters and view the report">
+    Click **Apply**. The API call fires with your parameters, and all KPI cards and charts update to reflect the filtered data. Active filter pills appear in the header row so you always know which filters are in effect.
+  </Step>
+  <Step title="Analyse the charts">
+    Review the income-vs-expense trend, the net balance trajectory, the category distribution pie, and the budget consumption bars. Use the period averages (`promedios`) to benchmark individual movements against your typical patterns.
+  </Step>
+  <Step title="Reset or refine filters">
+    Remove individual filter pills or click **Reset** to return to the default view. Adjust the date range granularity by widening or narrowing the period.
+  </Step>
+  <Step title="Download the report">
+    Click **Download** and choose PDF or image format to export the full report for sharing or personal records.
+  </Step>
+</Steps>
+
+<Note>
+  If no movements exist for the selected filters, the report page renders an empty-state message: "Aún no tienes movimientos registrados para generar reportes." Add movements that match your filter criteria and reload the report.
+</Note>

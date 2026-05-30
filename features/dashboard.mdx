@@ -1,0 +1,148 @@
+---
+title: "Leo Counter Dashboard: Real-Time Financial Overview"
+sidebarTitle: "Dashboard"
+description: "The Leo Counter dashboard shows KPIs, income versus expense trends, and real-time financial summaries sourced from your recorded movements and accounts."
+---
+
+The Leo Counter dashboard is the first screen you land on after logging in (`/home`). It gives you an at-a-glance picture of your household finances by pulling the last 30 days of movement data and assembling it into KPI cards and a trend chart — all without any manual configuration. When no movements have been recorded yet, the dashboard renders an empty-state prompt that guides you to create your first transaction.
+
+## How the Dashboard Works
+
+The dashboard uses a React front-end rendered via Inertia.js. On page load, the `useHome` hook calls the home API endpoint, which delegates to `GenerateHomeReportHandler`. That handler constructs a `GenerateFinancialReportQuery` spanning the previous month to today and runs two statistics: **KPIS** and **INGRESOS\_VS\_GASTOS**.
+
+```php
+// app/Application/Home/Queries/Handlers/GenerateHomeReportHandler.php
+$query = new GenerateFinancialReportQuery(
+    startDate: new DateTimeImmutable('-1 month')->format('Y-m-d'),
+    endDate: new DateTimeImmutable()->format('Y-m-d'),
+);
+return $this->reportHandler->__invoke(HomeStatisticsType::statistics(), $query);
+```
+
+The two statistics requested by `HomeStatisticsType::statistics()` are:
+
+```php
+// app/Application/Home/Enums/HomeStatisticsType.php
+public static function statistics(): array {
+    return [
+        MovimientoReportStatisticType::KPIS,
+        MovimientoReportStatisticType::INGRESOS_VS_GASTOS
+    ];
+}
+```
+
+## KPI Cards
+
+The `KPIAssembler` transforms raw query results into a `PeriodKPIDTO` that contains two nested objects:
+
+<CardGroup cols={2}>
+  <Card title="TotalsKPIDTO" icon="circle-dollar-to-slot">
+    Current-period absolute values:
+    - **ingresos** — total income (float)
+    - **gastos** — total expenses (float)
+    - **balance\_neto** — net balance (float)
+    - **movimientos** — total movement count (int)
+  </Card>
+  <Card title="VariationsKPIDTO" icon="arrow-trend-up">
+    Percentage change vs. the prior equivalent period:
+    - **ingresos** — income variation (nullable float)
+    - **gastos** — expense variation (nullable float)
+    - **balance\_neto** — net balance variation (nullable float)
+    - **movimientos** — movement count variation (nullable float)
+  </Card>
+</CardGroup>
+
+```php
+// app/Application/Reporte/Assemblers/Movimientos/KPIAssembler.php
+return new PeriodKPIDTO(
+    totales: new TotalsKPIDTO(
+        ingresos: $currentResults->totalIngresos(),
+        gastos: $currentResults->totalGastos(),
+        balance_neto: $currentResults->totalBalance(),
+        movimientos: $currentResults->totalMovimientos()
+    ),
+    variaciones: new VariationsKPIDTO(
+        ingresos: $this->percentageService->calculatePercentageChange(
+            $currentResults->totalIngresos(),
+            $previousResults?->totalIngresos()
+        ),
+        gastos: $this->percentageService->calculatePercentageChange(
+            $currentResults->totalGastos(),
+            $previousResults?->totalGastos()
+        ),
+        balance_neto: $this->percentageService->calculatePercentageChange(
+            $currentResults->totalBalance(),
+            $previousResults?->totalBalance()
+        ),
+        movimientos: $this->percentageService->calculatePercentageChange(
+            (float) $currentResults->totalMovimientos(),
+            $previousResults !== null ? (float) $previousResults->totalMovimientos() : null
+        )
+    )
+);
+```
+
+Variation values are `null` when there is no previous period to compare against (e.g. the very first month of data).
+
+## Income vs. Expense Trend Chart
+
+Below the KPI cards the dashboard renders an `IngresoAndGastoLineChart` component. This chart is driven by the `tendencia.ingresos_vs_gastos` data field, which comes from `IngresosVsGastosAssembler`. It plots income and expense totals over time, letting you spot seasonal patterns and sudden spikes at a glance.
+
+```tsx
+// resources/js/Pages/Home/Home.tsx
+const { KPIs, tendencia } = data.data
+return (
+  <HomeSection>
+    <KPISection kpis={KPIs} />
+    <IngresoAndGastoLineChart data={tendencia.ingresos_vs_gastos} />
+  </HomeSection>
+)
+```
+
+## Real-Time Updates via Laravel Reverb
+
+Leo Counter integrates **Laravel Reverb** (WebSockets) so that the dashboard reflects financial changes in real time. Whenever a movement is created, updated, or deleted, the back-end broadcasts an event over a private channel. The React front-end subscribes to that channel through the `useHome` hook, triggering an automatic data refresh without a full page reload.
+
+<Info>
+  Real-time updates require the Reverb server and the Laravel queue worker to be running. In the Docker Compose development setup both services are started automatically.
+</Info>
+
+## Empty State
+
+When `data?.data` is `null` — meaning no movements have been recorded yet — the dashboard renders an `EmptyDataMessage` component instead of the KPI and chart sections.
+
+```tsx
+// resources/js/Pages/Home/Home.tsx
+if (!data?.data) {
+  return (
+    <HomeSection>
+      <EmptyDataMessage
+        title="No hay datos disponibles"
+        paragraph="genera movimientos para ver tus resumenes"
+      />
+    </HomeSection>
+  )
+}
+```
+
+This prompt disappears automatically the moment you save your first movement; the WebSocket event triggers a refresh and the KPI cards appear.
+
+## Dashboard at a Glance
+
+<Steps>
+  <Step title="Log in">
+    Navigate to `/` and authenticate. You are redirected to `/home`.
+  </Step>
+  <Step title="Data loads">
+    The `useHome` hook fetches the last-30-days report. Loading and error states are handled with `<Loading>` and `<ErrorResponse>` components respectively.
+  </Step>
+  <Step title="KPIs render">
+    Four KPI cards display total income, total expenses, net balance, and movement count — each with a percentage change badge compared to the prior period.
+  </Step>
+  <Step title="Trend chart renders">
+    The income-vs-expense line chart plots time-series data below the KPI cards.
+  </Step>
+  <Step title="Live updates">
+    Any new movement saved elsewhere in the app pushes a WebSocket event that refreshes the dashboard in real time.
+  </Step>
+</Steps>

@@ -1,0 +1,317 @@
+---
+title: "Managing Financial Movements in Leo Counter"
+sidebarTitle: "Movements"
+description: "Leo Counter tracks three types of financial movements: spontaneous one-off transactions, fixed recurring entries, and pending obligations. Each supports file attachments."
+---
+
+Movements are the core data unit of Leo Counter. Every peso or dollar that flows in or out of your household is recorded as a movement and linked to an account and a category. Leo Counter models three distinct movement types to match the real-world lifecycle of household spending: spontaneous one-off transactions, fixed recurring entries, and upcoming pending obligations. All three share a common set of fields but differ in how they are triggered, tracked over time, and ultimately settled.
+
+## Movement Types (TipoMovimiento)
+
+Every movement carries a `tipo_movimiento_id` that resolves to one of two values defined in `TipoMovimientoEnum`:
+
+| Value | ID | Meaning |
+|---|---|---|
+| `INGRESO` | 1 | Money coming in (salary, transfers received, etc.) |
+| `GASTO` | 2 | Money going out (bills, purchases, subscriptions, etc.) |
+
+```php
+// app/Domains/TipoMovimiento/Enums/TipoMovimientoEnum.php
+enum TipoMovimientoEnum: int
+{
+    case INGRESO = 1;
+    case GASTO   = 2;
+}
+```
+
+---
+
+<Tabs>
+  <Tab title="Spontaneous">
+    ## Spontaneous Movements (Espontáneos)
+
+    Spontaneous movements represent one-off transactions that you record manually after they happen — a grocery run, an ATM withdrawal, or a freelance payment received. They are the most common movement type and support the full CRUD lifecycle.
+
+    **Base route:** `/movimientos-espontaneos`
+
+    ### Fields
+
+    <ParamField body="nombre" type="string" required>
+      A short label for the transaction (max 255 characters).
+    </ParamField>
+    <ParamField body="tipo_movimiento_id" type="integer" required>
+      `1` for income, `2` for expense.
+    </ParamField>
+    <ParamField body="cuenta_id" type="uuid" required>
+      The account the transaction debits or credits.
+    </ParamField>
+    <ParamField body="categoria_id" type="uuid" required>
+      The category used to classify the movement.
+    </ParamField>
+    <ParamField body="monto" type="numeric" required>
+      The transaction amount (min 0, up to 12 digits with 2 decimal places).
+    </ParamField>
+    <ParamField body="descripcion" type="string">
+      Optional free-text notes (max 1,000 characters).
+    </ParamField>
+    <ParamField body="comprobantes" type="array">
+      Optional array of file attachments (receipts, invoices, etc.).
+    </ParamField>
+
+    ```php
+    // app/Http/Requests/MovimientoEspontaneo/StoreMovimientoEspontaneoRequest.php
+    return [
+        'nombre'            => 'required|string|max:255',
+        'tipo_movimiento_id'=> 'required|integer|exists:tipo_movimientos,id',
+        'cuenta_id'         => 'required|string|exists:cuentas,id',
+        'categoria_id'      => 'required|string|exists:categorias,id',
+        'monto'             => 'required|numeric|min:0',
+        'descripcion'       => 'nullable|string|max:1000',
+        'comprobantes'      => ['nullable', 'array'],
+    ];
+    ```
+
+    ### Routes
+
+    | Method | URI | Action |
+    |--------|-----|--------|
+    | GET | `/movimientos-espontaneos` | List all spontaneous movements |
+    | GET | `/movimientos-espontaneos/create` | Show creation form |
+    | POST | `/movimientos-espontaneos` | Store a new movement |
+    | GET | `/movimientos-espontaneos/{id}/edit` | Show edit form |
+    | PUT | `/movimientos-espontaneos/{id}` | Update a movement |
+    | DELETE | `/movimientos-espontaneos/{id}` | Delete a movement |
+
+    ### Historical View
+
+    A read-only paginated list of **all** movements (across every type) is accessible at:
+
+    | Method | URI | Description |
+    |--------|-----|-------------|
+    | GET | `/movimientos/historicos` | Read-only historical movement list |
+    | GET | `/movimientos/historicos/{id}` | Detail view of a single movement |
+
+    <Note>
+      The historical view aggregates every movement regardless of type. Use it as an audit trail rather than a management interface.
+    </Note>
+  </Tab>
+
+  <Tab title="Fixed / Recurring">
+    ## Fixed Movements (Fijos)
+
+    Fixed movements model recurring financial obligations — monthly rent, annual insurance premiums, weekly grocery budgets. You define the amount, the frequency, and the next due date; Leo Counter's scheduler then generates pending movements automatically when each recurrence arrives.
+
+    **Base route:** `/movimientos-fijos`
+
+    ### Fields
+
+    <ParamField body="nombre" type="string" required>
+      Descriptive name for the recurring transaction (max 255 characters).
+    </ParamField>
+    <ParamField body="tipo_movimiento_id" type="integer" required>
+      `1` for income, `2` for expense.
+    </ParamField>
+    <ParamField body="categoria_id" type="uuid" required>
+      Category — should have `es_fijo = true` for consistency.
+    </ParamField>
+    <ParamField body="cuenta_id" type="uuid" required>
+      Account to debit or credit on each recurrence.
+    </ParamField>
+    <ParamField body="frecuencia_movimiento_id" type="integer" required>
+      Recurrence frequency — see the frequency table below.
+    </ParamField>
+    <ParamField body="monto" type="numeric" required>
+      The amount per occurrence (min 0).
+    </ParamField>
+    <ParamField body="fecha_proximo" type="date" required>
+      Date of the next scheduled occurrence (`YYYY-MM-DD`).
+    </ParamField>
+    <ParamField body="dias_aviso" type="integer">
+      Days before `fecha_proximo` to send an early warning notification (default 0).
+    </ParamField>
+    <ParamField body="descripcion" type="string">
+      Optional notes (max 1,000 characters).
+    </ParamField>
+
+    ```php
+    // app/Http/Requests/MovimientoFijo/StoreAndUpdateMovimientoFijoRequest.php
+    return [
+        'nombre'                 => 'required|string|max:255',
+        'tipo_movimiento_id'     => 'required|integer|exists:tipo_movimientos,id',
+        'categoria_id'           => 'required|uuid|exists:categorias,id',
+        'cuenta_id'              => 'required|uuid|exists:cuentas,id',
+        'monto'                  => 'required|numeric|min:0',
+        'fecha_proximo'          => 'required|date',
+        'frecuencia_movimiento_id' => 'required|numeric|exists:frecuencia_movimientos,id',
+        'dias_aviso'             => 'nullable|numeric|min:0',
+        'descripcion'            => 'nullable|string|max:1000',
+    ];
+    ```
+
+    ### Recurrence Frequencies
+
+    ```php
+    // app/Domains/MovimientoFijo/Enums/FrecuenciaMovimientoEnum.php
+    enum FrecuenciaMovimientoEnum: int
+    {
+        case DIARIO      = 1;   // Daily
+        case SEMANAL     = 2;   // Weekly
+        case QUINCENAL   = 3;   // Fortnightly
+        case MENSUAL     = 4;   // Monthly
+        case BIMESTRAL   = 5;   // Every 2 months
+        case TRIMESTRAL  = 6;   // Quarterly
+        case SEMESTRAL   = 7;   // Every 6 months
+        case ANUAL       = 8;   // Yearly
+    }
+    ```
+
+    ### Active / Paused Toggle
+
+    You can pause a fixed movement (e.g. a subscription on hold) without deleting it. Toggle the `active` attribute via:
+
+    ```
+    PATCH /movimientos-fijos/{id}/{attribute}/toggle
+    ```
+
+    Where `{attribute}` is `active`. The corresponding handler dispatches `ToggleMovimientoFijoCommand`.
+
+    ### Routes
+
+    | Method | URI | Action |
+    |--------|-----|--------|
+    | GET | `/movimientos-fijos` | List all fixed movements |
+    | GET | `/movimientos-fijos/create` | Show creation form |
+    | POST | `/movimientos-fijos` | Store a new fixed movement |
+    | GET | `/movimientos-fijos/{id}/edit` | Show edit form |
+    | PUT | `/movimientos-fijos/{id}` | Update a fixed movement |
+    | DELETE | `/movimientos-fijos/{id}` | Delete a fixed movement |
+    | PATCH | `/movimientos-fijos/{id}/{attribute}/toggle` | Toggle `active` flag |
+  </Tab>
+
+  <Tab title="Pending">
+    ## Pending Movements (Pendientes)
+
+    Pending movements represent known future obligations — an upcoming utility bill, a loan instalment, or any payment you need to make on a specific date. They can be created manually or generated automatically by the scheduler when a fixed movement becomes due.
+
+    **Base route:** `/movimientos-pendientes`
+
+    ### Fields
+
+    <ParamField body="nombre" type="string" required>
+      Label for the upcoming payment (max 255 characters).
+    </ParamField>
+    <ParamField body="tipo_movimiento_id" type="integer" required>
+      `1` for income, `2` for expense.
+    </ParamField>
+    <ParamField body="categoria_id" type="uuid" required>
+      Category for the obligation.
+    </ParamField>
+    <ParamField body="cuenta_id" type="uuid" required>
+      Account that will be affected once the obligation is settled.
+    </ParamField>
+    <ParamField body="monto" type="numeric" required>
+      Expected amount (min 0).
+    </ParamField>
+    <ParamField body="fecha_programada" type="date" required>
+      The date the payment is due (`YYYY-MM-DD`).
+    </ParamField>
+    <ParamField body="dias_aviso" type="integer">
+      Days before `fecha_programada` to send an early notification (default 0).
+    </ParamField>
+    <ParamField body="descripcion" type="string">
+      Optional notes (max 1,000 characters).
+    </ParamField>
+    <ParamField body="url_pago" type="url">
+      Optional payment portal URL (max 255 characters).
+    </ParamField>
+
+    ```php
+    // app/Http/Requests/MovimientoPendiente/StoreAndUpdateMovimientoPendienteRequest.php
+    return [
+        'nombre'             => 'required|string|max:255',
+        'tipo_movimiento_id' => 'required|integer|exists:tipo_movimientos,id',
+        'categoria_id'       => 'required|string|exists:categorias,id',
+        'cuenta_id'          => 'required|string|exists:cuentas,id',
+        'monto'              => 'required|numeric|min:0',
+        'fecha_programada'   => 'required|date',
+        'dias_aviso'         => 'nullable|numeric|min:0',
+        'descripcion'        => 'nullable|string|max:1000',
+        'url_pago'           => 'nullable|url|max:255',
+    ];
+    ```
+
+    ### Statuses
+
+    ```php
+    // app/Domains/MovimientoPendiente/Enums/EstadosMovimientoPendiente.php
+    enum EstadosMovimientoPendiente: string {
+        case PENDIENTE = 'pendiente';
+        case REALIZADO = 'realizado';
+        case VENCIDO   = 'vencido';
+    }
+    ```
+
+    The scheduler transitions `pendiente` → `vencido` automatically once `fecha_programada` has passed without the payment being marked done.
+
+    ### Mark as Done
+
+    When you complete a pending payment, call:
+
+    ```
+    PATCH /movimientos-pendientes/{id}/mark-as-done
+    ```
+
+    You can attach proof-of-payment files in the `comprobantes` array field. The handler records the settlement timestamp in `paid_at`, transitions the status to `realizado`, and creates a corresponding spontaneous movement that impacts the linked account balance.
+
+    ```php
+    // app/Http/Requests/MovimientoPendiente/MarkAsDoneRequest.php
+    return [
+        'comprobantes' => ['nullable', 'array'],
+    ];
+    ```
+
+    ### Routes
+
+    | Method | URI | Action |
+    |--------|-----|--------|
+    | GET | `/movimientos-pendientes` | List all pending movements |
+    | GET | `/movimientos-pendientes/create` | Show creation form |
+    | POST | `/movimientos-pendientes` | Store a new pending movement |
+    | GET | `/movimientos-pendientes/{id}` | View a single pending movement |
+    | GET | `/movimientos-pendientes/{id}/edit` | Show edit form |
+    | PUT | `/movimientos-pendientes/{id}` | Update a pending movement |
+    | PATCH | `/movimientos-pendientes/{id}/mark-as-done` | Settle the obligation |
+    | DELETE | `/movimientos-pendientes/{id}` | Soft-delete the record |
+
+    <Warning>
+      Deleting a pending movement is a soft delete. The record remains in the database and can be restored from **Configuración → Registros eliminados**.
+    </Warning>
+  </Tab>
+</Tabs>
+
+---
+
+## File Attachments
+
+Any spontaneous movement or settled pending movement can carry one or more file attachments (receipts, invoices, bank confirmations). Files are stored on the configured disk (defaults to `local`) and referenced through the `archivo_movimientos` table.
+
+```php
+// database/migrations/2026_02_03_153930_create_archivo_movimientos_table.php
+$table->string('nombre_original');
+$table->string('nombre_guardado');
+$table->string('disk')->default('local');
+$table->string('path');
+$table->string('mime_type');
+$table->string('extension');
+$table->unsignedBigInteger('tamano_bytes');
+$table->text('notas')->nullable();
+```
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/movimientos/archivos/{id}` | Stream the file inline |
+| GET | `/movimientos/archivos/{id}/download` | Force-download the file |
+
+<Tip>
+  The `dias_aviso` field on both fixed and pending movements lets you receive an email warning N days before the due date. Set it to `3` to get a three-day heads-up before each recurrence fires.
+</Tip>

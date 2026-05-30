@@ -1,0 +1,150 @@
+---
+title: "Budget Tracking and Monthly Planning in Leo Counter"
+sidebarTitle: "Budgets"
+description: "Create monthly budgets in Leo Counter, track spending progress against targets, duplicate existing budgets for reuse, and review historical performance in reports."
+---
+
+The budgeting system in Leo Counter lets you define spending (or income) targets for each category on a monthly basis, then automatically compare those targets against your recorded movements. Each budget is scoped to a single category and a single calendar month, ensuring that the system can give you a precise view of how much you have spent relative to what you planned.
+
+## How Budgets Work
+
+Budgets are stored in the `presupuestos` table. Each record pairs a `categoria_id` with a `periodo` (the first day of the target month) and a `monto` target. When the reports engine runs, it queries both the budget and the actual movements for that category in that month, then produces a `UsedBudgetDTO` with four derived values: amount spent, amount budgeted, amount remaining, and percentage used.
+
+```php
+// database/migrations/2026_01_21_225025_create_presupuestos_table.php
+$table->uuid('id')->primary();
+$table->foreignUuid('categoria_id')->constrained('categorias');
+$table->date('periodo');          // always the first day of the month
+$table->decimal('monto', 12, 2);
+$table->foreignUuid('user_id')->nullable()->constrained('users')->nullOnDelete();
+$table->text('descripcion')->nullable();
+$table->softDeletes();
+```
+
+The combination of `categoria_id` and `periodo` is unique, meaning you can have at most one budget per category per month.
+
+## Current-Month Budgets
+
+The primary budget management interface lives at `/presupuestos/mes-actual`. It only shows budgets whose `periodo` matches the first day of the current month.
+
+### Budget Fields
+
+<ParamField body="categoria_id" type="uuid" required>
+  The category this budget targets. Must be unique within the current month — you cannot have two budgets for the same category in the same period.
+</ParamField>
+<ParamField body="monto" type="numeric" required>
+  The spending or income target (min 0, up to 12 digits with 2 decimal places).
+</ParamField>
+<ParamField body="descripcion" type="string">
+  Optional note about this budget's purpose (max 80 characters).
+</ParamField>
+
+```php
+// app/Http/Requests/Presupuesto/StoreAndUpdatePresupuestoMesActualRequest.php
+return [
+    'categoria_id' => [
+        'required', 'string', 'exists:categorias,id',
+        Rule::unique('presupuestos')
+            ->where(fn ($q) =>
+                $q->where('periodo', Carbon::now()->firstOfMonth())
+                  ->where('categoria_id', $this->categoria_id)
+            )
+            ->ignore($this->id),
+    ],
+    'monto'       => ['required', 'numeric', 'min:0'],
+    'descripcion' => ['nullable', 'string', 'max:80'],
+];
+```
+
+### Routes
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/presupuestos/mes-actual` | List current-month budgets |
+| GET | `/presupuestos/mes-actual/create` | Show creation form |
+| POST | `/presupuestos/mes-actual` | Store a new budget |
+| GET | `/presupuestos/mes-actual/{id}/edit` | Show edit form |
+| PUT | `/presupuestos/mes-actual/{id}` | Update a budget |
+| DELETE | `/presupuestos/mes-actual/{id}` | Soft-delete a budget |
+| POST | `/presupuestos/mes-actual/{id}/duplicate` | Duplicate a budget |
+
+## Duplicating a Budget
+
+The **duplicate** feature lets you carry a budget forward without re-entering the form. When you call `POST /presupuestos/mes-actual/{id}/duplicate`, the `DuplicatePresupuestoHandler` finds the original budget aggregate, verifies it can be duplicated (uniqueness check), generates a new UUID, and persists the copy with the same category and amount.
+
+```php
+// app/Application/Presupuesto/Commands/Handlers/DuplicatePresupuestoHandler.php
+$aggregate = $this->repository->findById(new PresupuestoId($command->id));
+$id = PresupuestoId::generate($this->idGenerator);
+$duplicate = $aggregate->duplicate($id, $this->duplicateChecker);
+return $this->repository->store($duplicate);
+```
+
+<Tip>
+  Use **duplicate** at the start of a new month to clone your previous month's budget plan in one click, then adjust individual amounts as needed.
+</Tip>
+
+The `CurrentMonthPresupuestoForListDTO` exposes an `isDuplicate` boolean flag that the UI uses to hide the duplicate button on budgets that have already been carried forward.
+
+## Historical Budgets
+
+A read-only archive of past budgets is available at `/presupuestos/historicos`. This view is paginated and lets you look back at any previous month's plan without being able to accidentally edit historical data.
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/presupuestos/historicos` | Paginated list of past budgets |
+
+## Budget Progress Tracking
+
+The `UsedBudgetAssembler` calculates budget consumption in the reports engine:
+
+```php
+// app/Application/Reporte/Assemblers/Presupuestos/UsedBudgetAssembler.php
+return new UsedBudgetDTO(
+    gastado:          $vo->total_gastos,
+    presupuestado:    $vo->total_presupuesto,
+    disponible:       $vo->disponible,
+    porcentaje_usado: $vo->percentageUsed()
+);
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `gastado` | float | Total spent against this budget so far |
+| `presupuestado` | float | The original budget target |
+| `disponible` | float | `presupuestado - gastado` |
+| `porcentaje_usado` | float | Percentage of the budget consumed |
+
+These values power the **budget percentage chart** in the Reports module, giving you a visual bar for each category.
+
+## Relationship to Categories and Accounts
+
+Each budget is linked to a **category** (which itself belongs to a movement type — income or expense). Movements recorded against that category during the budget's period are summed and compared to the budget target. The account is not part of the budget definition; the same budget applies regardless of which account you use to pay expenses in that category.
+
+<Note>
+  You can only budget for categories that exist and have not been soft-deleted. If a category is removed after a budget is created, the budget record is retained but the category field displays as blank in the UI.
+</Note>
+
+## Monthly Planning Workflow
+
+<Steps>
+  <Step title="Create budgets for the month">
+    Go to `/presupuestos/mes-actual` and click **Create**. Select a category, enter a target amount, and optionally add a description. Repeat for each spending category you want to track.
+  </Step>
+  <Step title="Record movements throughout the month">
+    As you record spontaneous, fixed, and pending movements linked to those categories, Leo Counter automatically accumulates the spending totals.
+  </Step>
+  <Step title="Track progress in real time">
+    Return to `/presupuestos/mes-actual` to see the list of budgets. The percentage-used indicator updates every time a new movement is saved.
+  </Step>
+  <Step title="Review in the Reports module">
+    Navigate to `/reportes` to see the **budget percentage chart**, which visualizes `gastado` vs `presupuestado` for every budgeted category in the selected period.
+  </Step>
+  <Step title="Duplicate for next month">
+    At month-end, click **Duplicate** on each budget you want to carry forward. Adjust amounts where necessary and you are ready for the new month.
+  </Step>
+</Steps>
+
+<Warning>
+  Deleted budgets are soft-deleted and remain recoverable from **Configuración → Registros eliminados**. Hard-deleting a budget is permanent and removes it from historical reports.
+</Warning>

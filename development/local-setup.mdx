@@ -1,0 +1,191 @@
+---
+title: "Set Up a Leo Counter Development Environment"
+sidebarTitle: "Local Setup"
+description: "Run Leo Counter locally with Docker bind mounts and Vite hot module replacement. Changes to PHP and React source files reflect instantly without rebuilding images."
+---
+
+The development mode of Leo Counter mounts your local source tree directly into the running containers using Docker bind mounts. This means every change you make to a PHP controller, a domain class, or a React component is visible inside the container the moment you save the file — no image rebuild required. Vite's Hot Module Replacement (HMR) then pushes React changes to the browser without a full page refresh, giving you a tight, fast feedback loop.
+
+## Prerequisites
+
+<CardGroup cols={3}>
+  <Card title="Docker Engine" icon="docker">
+    Docker Engine installed and running. Your user must belong to the `docker` group on Linux.
+  </Card>
+  <Card title="Docker Compose v2" icon="layer-group">
+    Docker Compose v2 (`docker compose`) must be available. Verified automatically by the startup scripts.
+  </Card>
+  <Card title="Git" icon="code-branch">
+    Git is required to clone the repository and is also configured inside the container by `dev.sh`.
+  </Card>
+</CardGroup>
+
+<Note>
+  On Linux, if your user is not yet in the `docker` group run `sudo usermod -aG docker $USER` and open a new session before continuing.
+</Note>
+
+## Start the Development Environment
+
+<Tabs>
+  <Tab title="Linux (dev.sh)">
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/juanVillamilEchavarria/Leo_Counter-app
+        cd Leo_Counter-app
+        ```
+      </Step>
+      <Step title="Grant execute permission to the script">
+        ```bash
+        chmod +x dev.sh
+        ```
+      </Step>
+      <Step title="Run the development bootstrap">
+        ```bash
+        ./dev.sh
+        ```
+
+        The script validates Docker, creates the `.env` from `.env.example` if it does not yet exist, builds the `Dockerfile.dev` image, starts the support services (MariaDB, Redis, Mailhog, PhpMyAdmin), waits for the database health check to pass, then starts the `app` container and installs PHP and Node dependencies inside it.
+
+        <Note>
+          `dev.sh` also runs `git config --global --add safe.directory /var/www/html` inside the container. This lets Git commands work correctly when the source is owned by your host user but the container runs as `www-data`.
+        </Note>
+
+        On **Fedora, RHEL, or any system with SELinux enforcing**, the script automatically applies the correct file context to the `storage/` and `bootstrap/cache/` directories so that the container can write to the bind-mounted paths:
+
+        ```bash
+        sudo chcon -Rt container_file_t storage bootstrap/cache
+        ```
+
+        If `container_file_t` is unavailable it falls back to `svirt_sandbox_file_t`. On systems where SELinux is disabled the step is skipped entirely.
+      </Step>
+      <Step title="Start Vite HMR in a second terminal">
+        Open a new terminal window in the project root and run:
+
+        ```bash
+        docker compose -f docker-compose.dev.yml exec app pnpm run dev
+        ```
+
+        Vite binds to `0.0.0.0:5173` inside the container (port `5173` is forwarded to your host) and sets the HMR host to `localhost` so the browser connects back correctly. React components hot-reload without a full page refresh.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Windows (dev.ps1)">
+    <Steps>
+      <Step title="Clone the repository">
+        ```powershell
+        git clone https://github.com/juanVillamilEchavarria/Leo_Counter-app
+        cd Leo_Counter-app
+        ```
+      </Step>
+      <Step title="Allow local script execution">
+        ```powershell
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+        ```
+      </Step>
+      <Step title="Run the development bootstrap">
+        ```powershell
+        .\dev.ps1
+        ```
+
+        The PowerShell script performs the same operations as `dev.sh`: validates Docker Desktop is running, creates `.env` from `.env.example`, builds the development image, starts support services, waits for MariaDB to become healthy, starts the `app` container, and installs Composer and pnpm dependencies inside it.
+
+        Docker Desktop manages volume-sharing permissions automatically under WSL2 or Hyper-V, so no manual `chown` or SELinux steps are needed on Windows.
+      </Step>
+      <Step title="Start Vite HMR in a second terminal">
+        Open a new PowerShell window in the project root:
+
+        ```powershell
+        docker compose -f docker-compose.dev.yml exec app pnpm run dev
+        ```
+
+        React changes will hot-reload in the browser immediately after saving.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## How Bind Mounts Work
+
+In development, the entire project root is mounted into the container at `/var/www/html`:
+
+```yaml
+volumes:
+  - .:/var/www/html:z          # full source tree
+  - dev_node_modules:/var/www/html/node_modules  # node_modules in named volume
+  - ./storage:/var/www/html/storage:z            # storage separate from source
+```
+
+The `:z` suffix relabels the bind mount for SELinux on Fedora/RHEL systems. `node_modules` lives in a named Docker volume rather than a host directory to avoid cross-filesystem hardlink errors with pnpm's content-addressable store.
+
+PHP reads your edited files directly — there is no copy step. Apache reloads PHP on every request in development mode, so a saved controller or domain class change is immediately live on the next browser request.
+
+## Vite HMR Configuration
+
+`vite.config.ts` configures the development server to listen on all interfaces and use `localhost` as the HMR target:
+
+```typescript
+server: {
+    host: '0.0.0.0',
+    port: 5173,
+    hmr: {
+        host: 'localhost',
+    },
+},
+```
+
+The `laravel-vite-plugin` entry point is `resources/js/app.tsx`, which bootstraps Inertia.js and the React application. When Vite detects a change, it pushes a module update over the WebSocket connection to the browser and React applies it without unmounting the component tree.
+
+## Useful Development Commands
+
+All commands target the `docker-compose.dev.yml` file and run inside the `app` container.
+
+<AccordionGroup>
+  <Accordion title="Install a new PHP package">
+    ```bash
+    docker compose -f docker-compose.dev.yml exec app composer require vendor/package
+    ```
+    Composer writes to `composer.json` and `composer.lock` on the bind-mounted source, so the changes appear on your host immediately.
+  </Accordion>
+  <Accordion title="Install Node packages after editing package.json">
+    ```bash
+    docker compose -f docker-compose.dev.yml exec app pnpm install
+    ```
+  </Accordion>
+  <Accordion title="Run database migrations">
+    ```bash
+    docker compose -f docker-compose.dev.yml exec app php artisan migrate
+    ```
+  </Accordion>
+  <Accordion title="Clear the configuration cache">
+    ```bash
+    docker compose -f docker-compose.dev.yml exec app php artisan config:clear
+    ```
+    Run this any time you edit `.env` and the application does not pick up the new values.
+  </Accordion>
+  <Accordion title="Run the test suite">
+    ```bash
+    docker compose -f docker-compose.dev.yml exec app php artisan test
+    ```
+    PHPUnit is configured in `phpunit.xml` with an in-memory SQLite database so tests run in isolation without touching the development MariaDB instance.
+  </Accordion>
+  <Accordion title="Run the Artisan REPL (Tinker)">
+    ```bash
+    docker compose -f docker-compose.dev.yml exec app php artisan tinker
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Stopping and Restarting
+
+```bash
+# Stop all dev containers and remove the network
+docker compose -f docker-compose.dev.yml down
+
+# Start everything again (skips the full bootstrap)
+docker compose -f docker-compose.dev.yml up -d
+```
+
+<Tip>
+  After a clean `down`, restart with `up -d` rather than running `dev.sh` again. The script is intended for the initial setup. Subsequent starts with `up -d` reuse the already-installed dependencies from the bind mount and named volumes.
+</Tip>

@@ -1,0 +1,165 @@
+---
+title: "Managing Soft-Deleted Records in Leo Counter"
+sidebarTitle: "Soft Deletes"
+description: "Leo Counter soft-deletes certain records instead of permanently removing them. Admins can view, restore, or permanently delete soft-deleted records from the configuration panel."
+---
+
+When a user deletes a supported record in Leo Counter — an account, a category, a pending movement, or a budget — the record is not immediately removed from the database. Instead, Laravel's soft-delete mechanism stamps a `deleted_at` timestamp on the row and filters it out of all regular queries. The data remains intact and fully recoverable until an admin decides to permanently erase it. This design prevents accidental loss of financial history and gives administrators a safety net before data is gone for good.
+
+<Note>
+  The soft-delete management panel is exclusively accessible to administrators. All routes under `/configuracion/deleted/*` are wrapped in `AdminMiddleware`, which aborts with HTTP 403 if the authenticated user's role is not `admin`.
+</Note>
+
+---
+
+## Supported Domains
+
+Leo Counter's `SoftDeleteManagerTypes` enum defines the four domains that participate in soft deletion:
+
+```php
+// app/Domains/Configuracion/Enums/SoftDeleteManagerTypes.php
+enum SoftDeleteManagerTypes : string
+{
+    case CUENTAS               = 'cuentas';
+    case CATEGORIAS            = 'categorias';
+    case MOVIMIENTOS_PENDIENTES = 'movimientosPendientes';
+    case PRESUPUESTOS          = 'presupuestos';
+}
+```
+
+Each case maps a URL-safe domain slug to a human-readable label and a dedicated Inertia view. The table below summarises where soft deletes originate in the database schema:
+
+| Domain slug | Label | Table | Migration |
+|---|---|---|---|
+| `cuentas` | Cuentas | `cuentas` | `2026_02_08_215547_add_sof_deletes_to_cuentas_table.php` |
+| `categorias` | Categorias | `categorias` | `2026_01_14_200821_create_categorias_table.php` |
+| `movimientosPendientes` | Movimientos Pendientes | `movimiento_pendientes` | `2026_01_27_190641_create_movimiento_pendientes_table.php` |
+| `presupuestos` | Presupuestos | `presupuestos` | `2026_01_21_225025_create_presupuestos_table.php` |
+
+The `cuentas` table received its `deleted_at` column via a dedicated additive migration (the original `create_cuentas_table` migration also dropped the legacy `archived` boolean column at the same time). The remaining three tables had `softDeletes()` included in their creation migrations from the start.
+
+---
+
+## Routes
+
+All three soft-delete actions share the same URL pattern, using `{domain}` as the slug from the table above.
+
+| Method | Path | Route name | Description |
+|---|---|---|---|
+| `GET` | `/configuracion/deleted/{domain}` | `configuracion.deleted.index` | List all soft-deleted records for a domain |
+| `PUT` | `/configuracion/deleted/{domain}/restore/{id}` | `configuracion.deleted.restore` | Restore a single soft-deleted record |
+| `DELETE` | `/configuracion/deleted/{domain}/hard-delete/{id}` | `configuracion.deleted.hardDelete` | Permanently remove a record from the database |
+
+### Example URLs
+
+```
+GET    /configuracion/deleted/cuentas
+GET    /configuracion/deleted/categorias
+GET    /configuracion/deleted/movimientosPendientes
+GET    /configuracion/deleted/presupuestos
+
+PUT    /configuracion/deleted/cuentas/restore/550e8400-e29b-41d4-a716-446655440000
+DELETE /configuracion/deleted/cuentas/hard-delete/550e8400-e29b-41d4-a716-446655440000
+```
+
+---
+
+## How It Works
+
+The `SoftDeleteRecordsController` resolves the correct domain type from the URL slug and delegates to CQRS command/query handlers:
+
+```php
+// app/Http/Controllers/Configuracion/SoftDeleteRecordsController.php
+
+public function index(string $domain)
+{
+    $type = SoftDeleteManagerTypes::try($domain);
+    $data = $this->queryBus->ask(new ListDomainRecordsDeletedQuery($type));
+    $resource = $this->resourceResolver->resolve($type, $data);
+
+    return Inertia::render($this->viewByType($type), [
+        'title' => "{$type->label()} Eliminados",
+        'data'  => $resource,
+    ]);
+}
+
+public function restore(string $domain, string $id)
+{
+    $type = SoftDeleteManagerTypes::try($domain);
+    $this->dispatcher->dispatch(new RestoreRecordCommand(id: $id, domain: $type));
+    Inertia::flash('success', 'Restaurado con exito');
+    return back();
+}
+
+public function hardDelete(string $domain, string $id)
+{
+    $type = SoftDeleteManagerTypes::try($domain);
+    $this->dispatcher->dispatch(new HardDeleteRecordCommand(id: $id, domain: $type));
+    Inertia::flash('success', 'Eliminado con exito');
+    return back();
+}
+```
+
+Passing an unrecognised domain slug causes `SoftDeleteManagerTypes::try()` to throw a `LogicException`, so only the four valid slugs are accepted.
+
+---
+
+## Viewing Soft-Deleted Records
+
+<Steps>
+  <Step title="Open the Configuration panel">
+    Navigate to `/configuracion` (requires admin role). The configuration index lists available management sections.
+  </Step>
+  <Step title="Select a domain">
+    Go to the appropriate deleted-records URL, for example `/configuracion/deleted/cuentas`. The page renders a list of all records whose `deleted_at` is not null, presented through a domain-specific Inertia view.
+  </Step>
+  <Step title="Choose an action">
+    For each listed record you have two options: **Restore** or **Hard Delete** (see sections below).
+  </Step>
+</Steps>
+
+---
+
+## Restoring a Record
+
+Submitting a `PUT` request to `/configuracion/deleted/{domain}/restore/{id}` dispatches `RestoreRecordCommand`. The handler clears the `deleted_at` timestamp on the matching row, making the record visible again in all regular application queries.
+
+<Tabs>
+  <Tab title="Cuentas">
+    Restoring a soft-deleted account makes it appear again in `/cuentas` and become selectable when recording movements.
+  </Tab>
+  <Tab title="Categorias">
+    Restoring a category makes it available again when creating or editing movements, pending movements, and budgets.
+  </Tab>
+  <Tab title="Movimientos Pendientes">
+    Restoring a pending movement returns it to the pending payments list with its original scheduled date and amount intact.
+  </Tab>
+  <Tab title="Presupuestos">
+    Restoring a budget re-activates it for the budget period it originally covered, including its linked category and amount.
+  </Tab>
+</Tabs>
+
+---
+
+## Permanently Deleting a Record
+
+Submitting a `DELETE` request to `/configuracion/deleted/{domain}/hard-delete/{id}` dispatches `HardDeleteRecordCommand`. The handler executes a true SQL `DELETE` against the row, bypassing Laravel's soft-delete filter entirely. The record and all data it contains are removed from the database permanently.
+
+<Warning>
+  Hard deletion is **irreversible**. Once a record is hard-deleted, it cannot be recovered through the application. Ensure you have a database backup before using this action, especially for categories or accounts that may have historical associations with other records.
+</Warning>
+
+---
+
+## Inertia Views by Domain
+
+The controller selects the correct React page component based on the resolved domain type:
+
+| Domain | Inertia View |
+|---|---|
+| `cuentas` | `Configuracion/Deleted/Cuentas` |
+| `categorias` | `Configuracion/Deleted/Categorias` |
+| `movimientosPendientes` | `Configuracion/Deleted/Movimientos Pendientes` |
+| `presupuestos` | `Configuracion/Deleted/Presupuestos` |
+
+Each view receives a `data` prop containing the domain's deleted records (transformed through a `DeletedRecordsResourceResolver`) and a `title` prop such as `"Cuentas Eliminados"`.

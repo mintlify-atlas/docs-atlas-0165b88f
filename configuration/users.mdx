@@ -1,0 +1,233 @@
+---
+title: "User Roles and Account Management in Leo Counter"
+sidebarTitle: "Users"
+description: "Leo Counter uses two roles: admin and regular user. The first registered account is the admin. Admins manage all users; everyone can update their own profile and password."
+---
+
+Leo Counter enforces a simple two-role permission model: **admin** and **member**. The very first account created in a fresh installation automatically becomes the admin — there is no separate seeding step or environment variable required. All subsequent accounts are created by that admin from the user management panel, and they receive the `member` role by default. Every authenticated user, regardless of role, can view and update their own profile information and change their own password.
+
+## Roles
+
+<CardGroup cols={2}>
+  <Card title="Admin" icon="shield-check">
+    Full access to the application. Can manage all users (create, edit, delete, reset passwords), access the configuration panel, view soft-deleted records, and perform hard deletes.
+  </Card>
+  <Card title="Member" icon="user">
+    Access to all finance features (accounts, movements, budgets, reports). Can update their own profile and password. Cannot access user management or the configuration panel.
+  </Card>
+</CardGroup>
+
+The roles are defined as a PHP backed enum with two cases:
+
+```php
+// app/Domains/Usuario/Enums/Roles.php
+enum Roles: string
+{
+    case ADMIN  = 'admin';
+    case MEMBER = 'member';
+}
+```
+
+The `role` column is stored in the `users` table with a default of `member`. The migration that adds it is:
+
+```php
+// database/migrations/2026_01_04_023439_add_role_column_to_users_table.php
+Schema::table('users', function (Blueprint $table) {
+    $table->string('role')->default('member')->index();
+});
+```
+
+The `AdminMiddleware` checks this column on every request to a protected route:
+
+```php
+// app/Http/Middleware/AdminMiddleware.php
+if (!$user || $user->role !== Roles::ADMIN->value) {
+    abort(403, 'Acción no autorizada.');
+}
+```
+
+---
+
+## User Fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUID | Primary key, non-incrementing |
+| `name` | string | Display name |
+| `email` | string | Unique, used for login |
+| `password` | string | Hashed with bcrypt (`BCRYPT_ROUNDS=12`) |
+| `role` | string | `admin` or `member` |
+| `email_verified_at` | timestamp | Nullable |
+| `remember_token` | string | Standard Laravel remember-me token |
+
+---
+
+## First-Time Admin Setup
+
+When there are no users in the database, Leo Counter's `RedirectIfUsersAreEmptyMiddleware` intercepts every request to the login page and redirects to `/register`. After the first account is created, that route is locked by `RedirectIfUserExistsMiddleware`, which bounces any subsequent visit to `/register` back to the login page.
+
+<Steps>
+  <Step title="Clone and start the Docker stack">
+    ```bash
+    git clone https://github.com/juanVillamilEchavarria/Leo_Counter-app.git
+    cd Leo_Counter-app
+    cp .env.example .env
+    # Fill in DB_*, REVERB_*, and other required values, then:
+    docker compose up -d
+    ```
+  </Step>
+  <Step title="Generate the application key">
+    ```bash
+    docker compose exec app php artisan key:generate
+    ```
+    This writes `APP_KEY` into your `.env` file automatically.
+  </Step>
+  <Step title="Run migrations and seeders">
+    ```bash
+    docker compose exec app php artisan migrate --seed
+    ```
+    The seeder populates lookup tables (frequencies, account types, movement types, categories, notification channels) but does **not** create any user.
+  </Step>
+  <Step title="Navigate to /register">
+    Open `http://localhost:8080/register` in your browser. Because no users exist yet, the middleware redirects you here automatically from the home page.
+  </Step>
+  <Step title="Fill in the registration form">
+    Enter a name, email address, and password. On submission, `RegisteredUserController` dispatches `CreateTheAdminUserCommand`, which creates the user with the `admin` role.
+
+    ```php
+    // app/Http/Controllers/Auth/RegisteredUserController.php
+    $this->commandBus->dispatch(new CreateTheAdminUserCommand(
+        name:     $request->input('name'),
+        email:    $request->input('email'),
+        password: $request->input('password'),
+    ));
+    ```
+  </Step>
+  <Step title="Log in as admin">
+    After registration you are redirected to `/login`. Sign in with the credentials you just created. You now have full admin access to Leo Counter.
+  </Step>
+</Steps>
+
+<Note>
+  Once the first user exists, any visit to `/register` is caught by `RedirectIfUserExistsMiddleware` and redirected to `route('login')`. There is no public self-registration for additional accounts — only the admin can create new users.
+</Note>
+
+---
+
+## Admin: Managing Other Users
+
+All user management routes are protected by both the `auth` middleware and `AdminMiddleware`. They are accessible under `/usuarios`.
+
+### Available Routes
+
+| Method | Path | Action |
+|---|---|---|
+| `GET` | `/usuarios` | List all users |
+| `GET` | `/usuarios/create` | Show create-user form |
+| `POST` | `/usuarios` | Create a new user |
+| `GET` | `/usuarios/{usuario}/edit` | Show edit form |
+| `PUT` | `/usuarios/{usuario}` | Update name and email |
+| `DELETE` | `/usuarios/{usuario}` | Delete a user |
+| `PUT` | `/usuarios/{usuario}/password` | Reset another user's password |
+
+### Creating a New User
+
+<Tabs>
+  <Tab title="Via the UI">
+    1. Navigate to **Usuarios → Crear Usuario** (`/usuarios/create`).
+    2. Fill in **Nombre**, **Email**, and **Contraseña**.
+    3. Click **Guardar**. The new account is created with the `member` role.
+  </Tab>
+  <Tab title="What happens server-side">
+    ```php
+    // UsuarioController::store()
+    $this->dispatcher->dispatch(new StoreUsuarioCommand(
+        name:     $request->name,
+        email:    $request->email,
+        password: $request->password,
+    ));
+    ```
+    The command handler creates the user. Role defaults to `member` from the database column default.
+  </Tab>
+</Tabs>
+
+### Resetting Another User's Password
+
+An admin can reset any user's password without knowing the current one:
+
+```
+PUT /usuarios/{usuario}/password
+```
+
+This calls `UsuarioController::changePassword()`, which dispatches `ChangeUserPasswordCommand` with only `id` and `newPassword` — no current-password verification is required at the admin level.
+
+### Deleting a User
+
+```
+DELETE /usuarios/{usuario}
+```
+
+Dispatches `DestroyUsuarioCommand`. This is a **hard delete** on the `users` table — the record is permanently removed.
+
+<Warning>
+  Deleting a user is irreversible. Any data owned exclusively by that user (e.g., budgets with `user_id`) will have their foreign key set to `NULL` (the presupuestos migration uses `nullOnDelete()`).
+</Warning>
+
+---
+
+## Self-Service: Profile and Password
+
+Every authenticated user can manage their own account through the profile routes, which require `auth` but **not** `AdminMiddleware`.
+
+### Profile Routes
+
+| Method | Path | Route name | Description |
+|---|---|---|---|
+| `GET` | `/profile` | `profile.index` | View own profile |
+| `PUT` | `/profile` | `profile.update` | Update own name and email |
+| `GET` | `/profile/password` | `profile.password.index` | View password-change form |
+| `PUT` | `/profile/password` | `profile.password.update` | Change own password |
+
+### Updating Profile Information
+
+`ProfileController::update()` accepts name and email, then dispatches `UpdatePublicDataCommand`:
+
+```php
+$this->commandBus->dispatch(new UpdatePublicDataCommand(
+    id:    (string) auth()->id(),
+    name:  $request->name,
+    email: $request->email,
+));
+```
+
+### Changing Own Password
+
+`PasswordController::update()` requires the **current password** for verification before applying the change, using `ChangeOwnPasswordCommand`:
+
+```php
+$this->commandBus->dispatch(new ChangeOwnPasswordCommand(
+    id:              (string) auth()->id(),
+    currentPassword: $request->current_password,
+    newPassword:     $request->password,
+));
+```
+
+<Tip>
+  If a user forgets their current password, an admin can reset it for them via `PUT /usuarios/{usuario}/password` — which skips the current-password check.
+</Tip>
+
+---
+
+## Middleware Reference
+
+<Accordion title="RedirectIfUsersAreEmptyMiddleware">
+  Applied to the guest route group (login, forgot password, etc.). When `User::exists()` returns `false`, it redirects the visitor to `/register` instead of showing the login form. Once at least one user is registered, this middleware becomes a no-op.
+</Accordion>
+
+<Accordion title="RedirectIfUserExistsMiddleware">
+  Applied exclusively to `GET /register` and `POST /register`. When `User::exists()` returns `true`, it redirects the visitor to `route('login')`, making registration impossible for subsequent visitors.
+</Accordion>
+
+<Accordion title="AdminMiddleware">
+  Applied to the inner route group that contains `/usuarios`, `/configuracion`, and the soft-delete routes. Checks `auth()->user()->role === 'admin'`; aborts with HTTP 403 if the condition fails.
+</Accordion>
