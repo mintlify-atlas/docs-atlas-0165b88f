@@ -126,10 +126,11 @@ REVERB_APP_SECRET=
 REVERB_HOST=localhost
 REVERB_PORT=8085
 REVERB_SCHEME=http
+REVERB_SERVER_PORT=8081
 ```
 
 <Tip>
-  Generate unique values for `REVERB_APP_ID`, `REVERB_APP_KEY`, and `REVERB_APP_SECRET`. They can be any non-empty random strings for a local deployment. In production, treat them as secrets.
+  Generate unique values for `REVERB_APP_ID`, `REVERB_APP_KEY`, and `REVERB_APP_SECRET`. They can be any non-empty random strings for a local deployment. In production, treat them as secrets. Note that `REVERB_PORT` (8085) is the external host port Docker exposes, while `REVERB_SERVER_PORT` (8081) is the internal port the Reverb process listens on inside the container — keep them in sync with `docker-compose.yml`.
 </Tip>
 
 Save the file. If the installer is already paused waiting for you, press **Enter** to continue. Otherwise proceed to the next step.
@@ -169,7 +170,7 @@ You can also verify that all containers are healthy:
 docker compose ps
 ```
 
-All six containers (`leo_counter_app`, `leo_counter_queue`, `leo_counter_scheduler`, `leo_counter_reverb`, `mariadb_server`, `leo_counter_redis`) should show a status of `Up`.
+All eight containers (`leo_counter_app`, `leo_counter_queue`, `leo_counter_scheduler`, `leo_counter_reverb`, `mariadb_server`, `leo_counter_redis`, `phpmyadmin`, `mailhog`) should show a status of `Up`.
 
 </Step>
 
@@ -203,7 +204,7 @@ The script executes the following steps in strict order, aborting with a descrip
     - `php artisan config:clear` (flushes the build-time config cache so `.env` values take effect)
     - `php artisan migrate --force`
     - `php artisan db:seed --force`
-    - `php artisan storage:link --force`
+    - `rm -rf public/storage` then `php artisan storage:link --force` (removes any stale symlink before recreating it)
     - `php artisan config:cache`, `route:cache`, `view:cache`, `event:cache`
 
 11. **HTTP health check** — Sends a `curl` request to `http://localhost:8080`. If the response is not HTTP 200 or 302, the script prints the last 30 lines of `storage/logs/laravel.log` as a diagnostic aid.

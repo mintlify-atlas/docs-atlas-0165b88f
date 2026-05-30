@@ -1,7 +1,7 @@
 ---
-title: "Account and Owner Management in Leo Counter"
+title: "Financial Account and Owner Management in Leo Counter"
 sidebarTitle: "Accounts"
-description: "Leo Counter lets you manage multiple financial accounts with account types and owners. Toggle accounts active or inactive and assign them to any recorded movement."
+description: "Manage financial accounts in Leo Counter with account types and owners. Toggle accounts active or inactive and link them to any recorded movement."
 ---
 
 Accounts in Leo Counter represent the real-world financial containers where your money lives — a checking account at your bank, a savings account, a cash wallet, or a digital payment app. Every movement you record must be linked to exactly one account, which means Leo Counter can track the running balance of each container and show you at a glance how money flows between them.
@@ -114,7 +114,7 @@ return [
 
 You can pause an account — preventing new movements from being accidentally assigned to it — without deleting it. Use the toggle endpoint:
 
-```
+```http
 PATCH /cuentas/{cuenta}/{attribute}/toggle
 ```
 
@@ -139,9 +139,9 @@ Deleting an account via `DELETE /cuentas/{id}` performs a **soft delete** (the d
 
 Admins can restore or permanently hard-delete archived accounts from:
 
-```
-GET  /configuracion/deleted/cuentas
-PUT  /configuracion/deleted/cuentas/restore/{id}
+```http
+GET    /configuracion/deleted/cuentas
+PUT    /configuracion/deleted/cuentas/restore/{id}
 DELETE /configuracion/deleted/cuentas/hard-delete/{id}
 ```
 

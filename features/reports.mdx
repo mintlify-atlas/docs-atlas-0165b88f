@@ -1,14 +1,22 @@
 ---
-title: "Financial Reports and Analytics in Leo Counter"
+title: "Financial Reports and Spending Analytics in Leo Counter"
 sidebarTitle: "Reports"
-description: "Generate financial reports in Leo Counter with KPI cards, income vs. expense charts, category distribution, and budget usage. Filter by period, category, and account."
+description: "Generate Leo Counter reports with KPI cards, income vs. expense trends, category distribution, and budget usage. Filter by period, category, and account."
 ---
 
 The reports module at `/reportes` is the analytical heart of Leo Counter. It combines every movement, category, account, and budget record into a single interactive view that covers KPI summary cards, time-series trend charts, a category distribution pie chart, a net balance line chart, and a budget consumption bar. All sections update immediately when you change the active filters — no page reload required.
 
 ## How Reports Are Generated
 
-The `ReporteController` renders the Inertia page and seeds the initial data. The `useReporteApi` hook then takes over client-side, calling the report API endpoint which dispatches `GenerateFinancialReportQuery` through `GenerateReportHandler`. That handler runs multiple assemblers in parallel:
+The `ReporteController` renders the Inertia page shell. The `useReporteApi` hook then takes over client-side, calling the report API endpoints which dispatch `GenerateFinancialReportQuery` through `GenerateReportHandler`.
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/api/reportes` | Generate report with default date range |
+| POST | `/api/reportes/generate` | Generate report with custom filters |
+| GET | `/api/reportes/form-options` | Fetch available categories and accounts for filters |
+
+That handler runs multiple assemblers in parallel:
 
 - **KPIAssembler** → `PeriodKPIDTO`
 - **IngresosVsGastosAssembler** → `IngresosVsGastosDTO`

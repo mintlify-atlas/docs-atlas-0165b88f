@@ -125,10 +125,8 @@ queue-worker:
   volumes:
     - ./.env:/var/www/html/.env:z
     - ./storage:/var/www/html/storage:z
-  environment:
-    - REVERB_HOST=reverb
-    - REVERB_PORT=8081
-    - REVERB_SCHEME=http
+  env_file:
+    - .env
   depends_on:
     app:
       condition: service_started
@@ -144,7 +142,7 @@ queue-worker:
 | `--tries` | `3` | Maximum attempts before a job is marked failed |
 | `--max-time` | `3600` | Worker restarts after 3600 seconds (memory leak prevention) |
 
-The worker is configured with `REVERB_HOST=reverb` so that any broadcasting dispatched from a queued job reaches the Reverb container over the internal Docker network.
+In development, the worker is explicitly configured with `REVERB_HOST=reverb`, `REVERB_PORT=8081`, and `REVERB_SCHEME=http` so that any broadcasting dispatched from a queued job reaches the Reverb container over the internal Docker network. In production these values are inherited from the shared `env_file`.
 
 ---
 
@@ -161,14 +159,12 @@ scheduler:
   volumes:
     - ./.env:/var/www/html/.env:z
     - ./storage:/var/www/html/storage:z
-  environment:
-    - REVERB_HOST=reverb
-    - REVERB_PORT=8081
-    - REVERB_SCHEME=http
+  env_file:
+    - .env
 ```
 
 <Info>
-  Like the queue worker, the scheduler receives `REVERB_HOST` and `REVERB_PORT` environment variables so that any notifications dispatched by scheduled tasks are broadcast correctly through the Reverb container.
+  Like the queue worker, in development the scheduler is explicitly configured with `REVERB_HOST`, `REVERB_PORT`, and `REVERB_SCHEME` so that any notifications dispatched by scheduled tasks are broadcast correctly through the Reverb container. In production these values are inherited from the shared `env_file`.
 </Info>
 
 ---

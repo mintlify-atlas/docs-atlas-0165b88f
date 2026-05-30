@@ -140,17 +140,26 @@ The Shared kernel contains cross-cutting contracts and utilities that any module
 app/Shared/
 ├── Application/
 │   ├── Contracts/
+│   │   ├── Builders/        # Builder contracts (e.g., EmailFormatBuilderContract)
 │   │   ├── Bus/             # CommandBus, QueryBus, EventBus interfaces
+│   │   ├── Collections/     # Shared collection contracts
 │   │   ├── Commands/        # Base command interface
 │   │   ├── Queries/         # Base query interface + executor contracts
-│   │   └── Services/        # Shared application service contracts
+│   │   ├── Services/        # Shared application service contracts
+│   │   └── ValueObjects/    # Shared value object contracts
 │   ├── DTOs/                # Shared DTO base classes (e.g., file upload DTOs)
+│   ├── Exceptions/          # Shared application exceptions
 │   ├── Mappers/             # Shared mapping utilities
-│   └── Resolvers/           # Shared resolver base classes
+│   ├── Queries/             # Shared query utilities
+│   ├── Resolvers/           # Shared resolver base classes
+│   └── Strategies/          # Shared strategy base classes
 ├── Domain/
-│   ├── ValueObjects/        # Shared value object base classes (Abstracts/)
-│   ├── Services/Financial/  # Financial calculation domain services
-│   └── Contracts/Checkers/  # Generic domain checker interfaces
+│   ├── Collections/         # Shared domain collections
+│   ├── Contracts/           # Generic domain checker interfaces
+│   ├── Enums/               # Shared domain enums
+│   ├── Exceptions/          # Shared domain exceptions
+│   ├── Services/            # Financial calculation domain services
+│   └── ValueObjects/        # Shared value object base classes
 └── Infrastructure/
     ├── AbstractPersistence/ # Abstract Eloquent repository base
     ├── Framework/Laravel/

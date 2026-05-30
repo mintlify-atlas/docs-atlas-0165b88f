@@ -1,5 +1,5 @@
 ---
-title: "Email Notifications and Alerts in Leo Counter"
+title: "Email Notification Channels and Alerts in Leo Counter"
 sidebarTitle: "Notifications"
 description: "Leo Counter sends email alerts for pending payments and recurring events. Configure notification channels and subscribers through the admin settings panel."
 ---
@@ -31,9 +31,9 @@ $table->boolean('active')->default(false);
 | POST | `/canal-notificaciones` | Create a channel |
 | PUT | `/canal-notificaciones/{id}` | Update a channel |
 | DELETE | `/canal-notificaciones/{id}` | Delete a channel |
-| PATCH | `/canal-notificaciones/{id}/{attribute}/toggle` | Toggle `active` flag |
+| PATCH | `/canal-notificaciones/{id}/{attribute}/toggle` | Toggle `active` flag (**implemented**) |
 
-Toggle a channel on or off:
+The only action with a full controller implementation is the toggle. Toggle a channel on or off:
 
 ```
 PATCH /canal-notificaciones/{canal}/{attribute}/toggle
@@ -83,15 +83,18 @@ When a subscriber is stored, `StoreSuscriptorHandler` dispatches an email verifi
 
 ### Subscriber Routes
 
-| Method | URI | Action |
-|--------|-----|--------|
-| GET | `/suscriptor-notificaciones` | List all subscribers |
-| POST | `/suscriptor-notificaciones` | Add a subscriber |
-| DELETE | `/suscriptor-notificaciones/{id}` | Remove a subscriber |
-| PATCH | `/suscriptor-notificaciones/{id}/{attribute}/toggle` | Toggle `active` flag |
+Subscriber management is split across two controllers. The **web** `SuscriptorController` only provides the toggle endpoint. The **API** `SuscriptorApiController` provides the create, delete, and form-options endpoints consumed by the React front-end:
+
+| Method | URI | Controller | Action |
+|--------|-----|-----------|--------|
+| GET | `/suscriptor-notificaciones` | Web (resource index) | List all subscribers |
+| PATCH | `/suscriptor-notificaciones/{id}/{attribute}/toggle` | Web `SuscriptorController` | Toggle `active` flag |
+| POST | `/api/notificacion/suscriptores` | API `SuscriptorApiController` | Add a subscriber |
+| DELETE | `/api/notificacion/suscriptores/{id}` | API `SuscriptorApiController` | Remove a subscriber |
+| GET | `/api/notificacion/suscriptores/form-options` | API `SuscriptorApiController` | Subscriber form options |
 
 <Note>
-  The edit and update actions are intentionally omitted for subscribers. To change a subscriber's channel, delete the existing subscription and create a new one.
+  Edit and update actions are intentionally excluded for subscribers. To change a subscriber's channel, delete the existing subscription and create a new one. The `store` and `destroy` actions that actually persist changes are handled by the API controller at `/api/notificacion/suscriptores`, not the web resource route.
 </Note>
 
 ### Email Verification
@@ -134,7 +137,7 @@ public function toggle(string $id, string $attribute)
 
 Notifications are fired by the **daily financial tasks command**, which processes two types of events:
 
-1. **Fixed movements due** — when a `MovimientoFijo` reaches its `fecha_proximo` (or is within the `dias_aviso` warning window), `ProcessFinancialTaskForMovimientoFijoCommand` is dispatched. If `registrar_automatico = true`, Leo Counter automatically creates a pending movement. Regardless, subscribers on active channels receive an alert.
+1. **Fixed movements due** — when a `MovimientoFijo` reaches its `fecha_proximo` (or is within the `dias_aviso` warning window), `ProcessFinancialTaskForMovimientoFijoCommand` is dispatched. If `registrar_automatico = true`, Leo Counter automatically registers a **spontaneous movement** (`RegisterMovimientoFromMovimientoFijoCommand`) and advances `fecha_proximo` to the next recurrence. If `registrar_automatico = false`, it creates a **pending movement** (`RegisterMovimientoPendienteFromMovimientoFijoCommand`) instead. In both cases, subscribers on active channels receive a warning alert when the `dias_aviso` threshold is reached.
 
 2. **Pending payments due or expired** — `ProcessFinancialTasksForMovimientoPendienteCommand` scans pending movements. Movements approaching `fecha_programada` within the `dias_aviso` window trigger a warning notification (`SendMessageToUsersWhenMovimientoPendienteWarningDayArrivedEventHandler`). Movements whose `fecha_programada` has passed without being marked done trigger an expiry alert (`SendMessageToUsersWhenMovimientoPendienteExpiredEventHandler`) and transition their status to `vencido`.
 

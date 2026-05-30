@@ -115,7 +115,7 @@ The dashboard balance and charts update in real time via the Reverb WebSocket co
 
 ## What's Running Under the Hood
 
-After a successful installation, Docker Compose manages six containers:
+After a successful installation, Docker Compose manages eight containers:
 
 | Container | Role |
 |---|---|
@@ -125,5 +125,7 @@ After a successful installation, Docker Compose manages six containers:
 | `leo_counter_reverb` | Laravel Reverb WebSocket server |
 | `mariadb_server` | MariaDB LTS database |
 | `leo_counter_redis` | Redis (cache, queues, sessions) |
+| `phpmyadmin` | PhpMyAdmin visual database manager |
+| `mailhog` | Local email capture (SMTP + web UI) |
 
 To stop or restart the application see the [Linux installation guide](/installation/linux#maintenance-commands) or the [Windows installation guide](/installation/windows#managing-services).

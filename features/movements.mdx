@@ -1,7 +1,7 @@
 ---
-title: "Managing Financial Movements in Leo Counter"
+title: "Spontaneous, Fixed, and Pending Movements in Leo Counter"
 sidebarTitle: "Movements"
-description: "Leo Counter tracks three types of financial movements: spontaneous one-off transactions, fixed recurring entries, and pending obligations. Each supports file attachments."
+description: "Leo Counter tracks spontaneous, fixed recurring, and pending movements. Each type supports file attachments and integrates with accounts and categories."
 ---
 
 Movements are the core data unit of Leo Counter. Every peso or dollar that flows in or out of your household is recorded as a movement and linked to an account and a category. Leo Counter models three distinct movement types to match the real-world lifecycle of household spending: spontaneous one-off transactions, fixed recurring entries, and upcoming pending obligations. All three share a common set of fields but differ in how they are triggered, tracked over time, and ultimately settled.
@@ -55,7 +55,16 @@ enum TipoMovimientoEnum: int
       Optional free-text notes (max 1,000 characters).
     </ParamField>
     <ParamField body="comprobantes" type="array">
-      Optional array of file attachments (receipts, invoices, etc.).
+      Optional array of new file attachments (receipts, invoices, etc.).
+    </ParamField>
+
+    On **update**, two additional fields are accepted:
+
+    <ParamField body="comprobantes_existing" type="array">
+      Array of attachment IDs to retain from the previous version of the movement.
+    </ParamField>
+    <ParamField body="comprobantes_delete_ids" type="array">
+      Array of attachment IDs to remove when the movement is updated.
     </ParamField>
 
     ```php
@@ -69,7 +78,29 @@ enum TipoMovimientoEnum: int
         'descripcion'       => 'nullable|string|max:1000',
         'comprobantes'      => ['nullable', 'array'],
     ];
+
+    // app/Http/Requests/MovimientoEspontaneo/UpdateMovimientoEspontaneoRequest.php
+    // Extends StoreMovimientoEspontaneoRequest and adds:
+    return array_merge(parent::rules(), [
+        'comprobantes_delete_ids' => ['nullable', 'array'],
+        'comprobantes_existing'   => ['nullable', 'array'],
+    ]);
     ```
+
+    ### Deleting a Spontaneous Movement
+
+    Deleting a spontaneous movement requires the current user's password as confirmation. The `password` field is validated server-side before the movement is soft-deleted.
+
+    ```php
+    // app/Http/Requests/MovimientoEspontaneo/DestroyMovimientoEspontaneoRequest.php
+    return [
+        'password' => ['required', 'string'],
+    ];
+    ```
+
+    <Warning>
+      You must submit `password` (the authenticated user's current password) in the request body when calling `DELETE /movimientos-espontaneos/{id}`. Omitting it will return a validation error.
+    </Warning>
 
     ### Routes
 
@@ -80,20 +111,7 @@ enum TipoMovimientoEnum: int
     | POST | `/movimientos-espontaneos` | Store a new movement |
     | GET | `/movimientos-espontaneos/{id}/edit` | Show edit form |
     | PUT | `/movimientos-espontaneos/{id}` | Update a movement |
-    | DELETE | `/movimientos-espontaneos/{id}` | Delete a movement |
-
-    ### Historical View
-
-    A read-only paginated list of **all** movements (across every type) is accessible at:
-
-    | Method | URI | Description |
-    |--------|-----|-------------|
-    | GET | `/movimientos/historicos` | Read-only historical movement list |
-    | GET | `/movimientos/historicos/{id}` | Detail view of a single movement |
-
-    <Note>
-      The historical view aggregates every movement regardless of type. Use it as an audit trail rather than a management interface.
-    </Note>
+    | DELETE | `/movimientos-espontaneos/{id}` | Delete a movement (requires `password`) |
   </Tab>
 
   <Tab title="Fixed / Recurring">
@@ -131,6 +149,12 @@ enum TipoMovimientoEnum: int
     </ParamField>
     <ParamField body="descripcion" type="string">
       Optional notes (max 1,000 characters).
+    </ParamField>
+    <ParamField body="registrar_automatico" type="boolean">
+      When `true`, the scheduler automatically registers a **spontaneous movement** when this fixed movement's due date arrives (advancing `fecha_proximo` to the next recurrence). When `false` (default), the scheduler creates a **pending movement** instead, requiring you to manually mark it as done.
+    </ParamField>
+    <ParamField body="url_pago" type="url">
+      Optional payment portal URL associated with this recurring obligation (e.g. a utility company's payment page). Stored in the database and surfaced in the resource response.
     </ParamField>
 
     ```php
@@ -288,6 +312,41 @@ enum TipoMovimientoEnum: int
     </Warning>
   </Tab>
 </Tabs>
+
+---
+
+## Historical Movements View
+
+A read-only paginated list of **all** recorded movements (across every type) is accessible at:
+
+| Method | URI | Description |
+|--------|-----|-------------|
+| GET | `/movimientos/historicos` | Paginated historical movement list |
+| GET | `/movimientos/historicos/{id}` | Detail view of a single movement |
+
+<Note>
+  The historical view aggregates every movement regardless of type. Use it as an audit trail rather than a management interface. It does not support editing or deletion.
+</Note>
+
+---
+
+## Pagos Pendientes
+
+The `/pagos-pendientes` resource is registered in the router and renders a dedicated **Pagos Pendientes** view (`PagosPendientes/Index`). This feature is currently in an early implementation stage — the controller scaffolding is in place but the full business logic has not yet been completed. The routes are available for future use:
+
+| Method | URI | Action |
+|--------|-----|--------|
+| GET | `/pagos-pendientes` | List pagos pendientes |
+| GET | `/pagos-pendientes/create` | Show creation form |
+| POST | `/pagos-pendientes` | Store a new pago pendiente |
+| GET | `/pagos-pendientes/{id}` | View a single pago pendiente |
+| GET | `/pagos-pendientes/{id}/edit` | Show edit form |
+| PUT | `/pagos-pendientes/{id}` | Update a pago pendiente |
+| DELETE | `/pagos-pendientes/{id}` | Delete a pago pendiente |
+
+<Note>
+  For fully implemented pending obligation management, use the **Movimientos Pendientes** feature (`/movimientos-pendientes`) which includes status tracking, advance-notice alerts, and mark-as-done settlement.
+</Note>
 
 ---
 

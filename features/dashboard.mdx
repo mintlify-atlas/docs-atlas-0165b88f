@@ -8,7 +8,7 @@ The Leo Counter dashboard is the first screen you land on after logging in (`/ho
 
 ## How the Dashboard Works
 
-The dashboard uses a React front-end rendered via Inertia.js. On page load, the `useHome` hook calls the home API endpoint, which delegates to `GenerateHomeReportHandler`. That handler constructs a `GenerateFinancialReportQuery` spanning the previous month to today and runs two statistics: **KPIS** and **INGRESOS\_VS\_GASTOS**.
+The dashboard uses a React front-end rendered via Inertia.js. On page load, the `useHome` hook calls `GET /api/home` (served by `HomeApiController`), which delegates to `GenerateHomeReportHandler`. That handler constructs a `GenerateFinancialReportQuery` spanning the previous month to today and runs two statistics: **KPIS** and **INGRESOS\_VS\_GASTOS**.
 
 ```php
 // app/Application/Home/Queries/Handlers/GenerateHomeReportHandler.php

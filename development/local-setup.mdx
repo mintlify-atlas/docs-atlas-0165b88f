@@ -45,7 +45,7 @@ The development mode of Leo Counter mounts your local source tree directly into 
         ./dev.sh
         ```
 
-        The script validates Docker, creates the `.env` from `.env.example` if it does not yet exist, builds the `Dockerfile.dev` image, starts the support services (MariaDB, Redis, Mailhog, PhpMyAdmin), waits for the database health check to pass, then starts the `app` container and installs PHP and Node dependencies inside it.
+        The script validates Docker, creates the `.env` from `.env.example` if it does not yet exist, builds the `Dockerfile.dev` image, starts the support services (MariaDB, Redis, Mailhog, PhpMyAdmin), waits for the database health check to pass, then starts the `app` container, installs PHP and Node dependencies, generates the application key, runs migrations and seeders, and creates the storage symlink.
 
         <Note>
           `dev.sh` also runs `git config --global --add safe.directory /var/www/html` inside the container. This lets Git commands work correctly when the source is owned by your host user but the container runs as `www-data`.
@@ -88,7 +88,7 @@ The development mode of Leo Counter mounts your local source tree directly into 
         .\dev.ps1
         ```
 
-        The PowerShell script performs the same operations as `dev.sh`: validates Docker Desktop is running, creates `.env` from `.env.example`, builds the development image, starts support services, waits for MariaDB to become healthy, starts the `app` container, and installs Composer and pnpm dependencies inside it.
+        The PowerShell script performs the same operations as `dev.sh`: validates Docker Desktop is running, creates `.env` from `.env.example`, builds the development image, starts support services, waits for MariaDB to become healthy, starts the `app` container, installs Composer and pnpm dependencies, generates the application key, runs migrations and seeders, and creates the storage symlink.
 
         Docker Desktop manages volume-sharing permissions automatically under WSL2 or Hyper-V, so no manual `chown` or SELinux steps are needed on Windows.
       </Step>
@@ -167,7 +167,7 @@ All commands target the `docker-compose.dev.yml` file and run inside the `app` c
     ```bash
     docker compose -f docker-compose.dev.yml exec app php artisan test
     ```
-    PHPUnit is configured in `phpunit.xml` with an in-memory SQLite database so tests run in isolation without touching the development MariaDB instance.
+    Pest (running on top of PHPUnit) is configured in `phpunit.xml` with an in-memory SQLite database so tests run in isolation without touching the development MariaDB instance.
   </Accordion>
   <Accordion title="Run the Artisan REPL (Tinker)">
     ```bash

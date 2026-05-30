@@ -132,7 +132,12 @@ REVERB_APP_SECRET=
 REVERB_HOST=localhost
 REVERB_PORT=8085
 REVERB_SCHEME=http
+REVERB_SERVER_PORT=8081
 ```
+
+<Tip>
+  Note that `REVERB_PORT` (8085) is the external host port Docker exposes, while `REVERB_SERVER_PORT` (8081) is the internal port the Reverb process listens on inside the container — keep them in sync with `docker-compose.yml`.
+</Tip>
 
 Save the file. If the installer is already waiting for you, press **Enter** at the prompt to continue.
 
@@ -175,7 +180,7 @@ You can also verify container health from PowerShell:
 docker compose ps
 ```
 
-All six containers should show a status of `Up`:
+All eight containers should show a status of `Up`:
 
 | Container | Role |
 |---|---|
@@ -185,6 +190,8 @@ All six containers should show a status of `Up`:
 | `leo_counter_reverb` | Reverb WebSocket server |
 | `mariadb_server` | MariaDB database |
 | `leo_counter_redis` | Redis cache and queues |
+| `phpmyadmin` | PhpMyAdmin visual database manager |
+| `mailhog` | Local email capture (SMTP + web UI) |
 
 </Step>
 
